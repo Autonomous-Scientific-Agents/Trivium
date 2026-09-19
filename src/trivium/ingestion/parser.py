@@ -66,8 +66,11 @@ def parse_text(raw: str, *, doc_id: str, fallback_title: str) -> tuple[str, list
     lines = text.split("\n")
     headings: list[tuple[int, int, str]] = []  # (char_offset, level, title)
     offset = 0
+    in_fence = False
     for ln in lines:
-        h = detect_heading(ln)
+        if ln.lstrip().startswith("```") or ln.lstrip().startswith("~~~"):
+            in_fence = not in_fence  # "# comment" inside a code block is not a heading
+        h = None if in_fence else detect_heading(ln)
         if h:
             headings.append((offset, h[0], h[1]))
         offset += len(ln) + 1
@@ -83,7 +86,7 @@ def parse_text(raw: str, *, doc_id: str, fallback_title: str) -> tuple[str, list
             sections.append(
                 Section(id="preamble", title="Preamble", level=1, start_char=0, end_char=first_end)
             )
-    used: dict[str, int] = {}
+    used: dict[str, int] = {sec.id: 1 for sec in sections}  # keep "preamble" unique
     for i, (start, level, htitle) in enumerate(headings):
         end = headings[i + 1][0] if i + 1 < len(headings) else len(text)
         base = _slug(htitle)

@@ -73,7 +73,7 @@ class GenerationRun:
             prompt_version=PROMPT_VERSION,
             seed=self.config.generation.seed,
             llm_calls=self.llm_calls,
-            config=self.config.model_dump(mode="json", exclude={"inputs", "output", "jsonl_dir"}),
+            config=self.config.public_dump(),
         )
         return Dataset(
             dataset=info,
@@ -219,8 +219,10 @@ class Controller:
             for ec in evaluated:
                 novelties.append(ec.evaluation.novelty)
                 if ec.evaluation.accepted and len(self.run.accepted) < self.run.target:
-                    sim, overlap, nearest = await self.evaluator.redundancy.assess(ec.candidate)
-                    if sim >= self.cfg.evaluation.thresholds.duplicate_similarity:
+                    sim, overlap, nearest = await self.evaluator.redundancy.assess(
+                        ec.candidate, judge=self.evaluator._judge
+                    )
+                    if self.evaluator.is_duplicate(ec.candidate, sim, overlap, nearest):
                         ec.evaluation.accepted = False
                         ec.evaluation.rejection_reasons.append("duplicate")
                     elif (
@@ -290,7 +292,7 @@ class Controller:
     async def _maybe_multiple_choice(self, ec: EvaluatedCandidate) -> EvaluatedCandidate:
         if self.mc is None or ec.candidate.question_type != QuestionType.short_answer:
             return ec
-        want = self.selector._type_target("multiple_choice")
+        want = self.selector.type_target("multiple_choice")
         have = sum(
             1
             for a in self.run.accepted
@@ -335,4 +337,5 @@ async def generate_dataset(config: Config, *, write: bool = True) -> tuple[Datas
                 log.info("wrote JSONL bundle to %s", config.jsonl_dir)
         return dataset, run
     finally:
+        await models.aclose()
         models.close()

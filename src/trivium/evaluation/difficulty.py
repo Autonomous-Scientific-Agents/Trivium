@@ -27,8 +27,6 @@ def calibrate(
             return Difficulty.easy, "tiers"
         if medium is not None and medium >= threshold:
             return Difficulty.medium if small is not None else Difficulty.easy, "tiers"
-        if medium is None and small is not None and small < threshold:
-            return Difficulty.hard, "tiers"
         return Difficulty.hard, "tiers"
     # proxy
     if closed_book_accuracy is not None and closed_book_accuracy >= threshold:

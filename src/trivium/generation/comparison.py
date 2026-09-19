@@ -13,8 +13,6 @@ INSTRUCTIONS = """The facts report the same quantity for several different subje
 {extreme} value of that quantity. Mention the quantity and any shared conditions explicitly; do not
 mention the numeric values themselves. The `answer` is the subject name given in `required_answer`."""
 
-LOWER_IS_BETTER = ("error", "mae", "rmse", "loss", "cost", "time", "latency", "deviation")
-
 
 def comparable_groups(facts: list[Fact], *, cross_document: bool | None = None) -> list[list[Fact]]:
     """Group numeric facts by (predicate, unit, qualifiers) with ≥2 distinct subjects and values."""
@@ -48,8 +46,14 @@ class ComparisonGenerator(Generator):
     reasoning_depth = 2
     cross_document: bool | None = None
 
+    _groups: list[list[Fact]] | None = None
+
     def groups(self) -> list[list[Fact]]:
-        return comparable_groups(self.ctx.store.all(), cross_document=self.cross_document)
+        if self._groups is None:  # the store is static after extraction
+            self._groups = comparable_groups(
+                self.ctx.store.all(), cross_document=self.cross_document
+            )
+        return self._groups
 
     def available(self) -> bool:
         return bool(self.groups())

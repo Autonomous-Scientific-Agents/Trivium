@@ -37,6 +37,43 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
 
 
+_NON_RETRYABLE_STATUS = re.compile(r"\b(400|401|403|404|405|413|422)\b")
+_NON_RETRYABLE_HINTS = (
+    "invalid_api_key",
+    "authentication",
+    "unauthorized",
+    "permission",
+    "model_not_found",
+    "does not exist",
+    "unsupported_parameter",
+    "invalid_request_error",
+    "argo requires",
+    "unknown argo env",
+)
+
+
+def is_retryable(exc: Exception) -> bool:
+    """False for configuration/authorisation/validation errors that will not fix themselves."""
+    if isinstance(exc, (ValueError, TypeError, KeyError, ImportError)):
+        return False
+    if exc.__class__.__name__ in (
+        "ArgoConfigError",
+        "AuthenticationError",
+        "PermissionDeniedError",
+        "NotFoundError",
+        "BadRequestError",
+        "UnprocessableEntityError",
+    ):
+        return False
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status not in (400, 401, 403, 404, 405, 413, 422)
+    msg = str(exc).lower()
+    if any(h in msg for h in _NON_RETRYABLE_HINTS):
+        return False
+    return not _NON_RETRYABLE_STATUS.search(msg[:120])
+
+
 class LLMError(RuntimeError):
     pass
 
@@ -90,6 +127,17 @@ class LLM:
         self.calls = 0
 
     # ------------------------------------------------------------------ public
+    async def aclose(self) -> None:
+        """Release network resources (no-op for providers without a client)."""
+        client = getattr(self, "_client", None)
+        for meth in ("aclose", "close"):
+            fn = getattr(client, meth, None)
+            if fn is not None:
+                res = fn()
+                if asyncio.iscoroutine(res):
+                    await res
+                return
+
     async def generate(
         self,
         messages: list[Message],
@@ -121,6 +169,7 @@ class LLM:
                 "response_model": response_model.__name__ if response_model else None,
                 "task": task,
                 "trial": trial,
+                "max_tokens": max_tokens or self.max_tokens,
             }
         )
         if self.cache is not None:
@@ -130,8 +179,8 @@ class LLM:
 
         last_err: Exception | None = None
         for attempt in range(self.max_retries):
-            async with self._sem:
-                try:
+            try:
+                async with self._sem:  # hold the slot only for the call itself
                     text = await self._complete(
                         messages,
                         temperature=temp,
@@ -140,11 +189,15 @@ class LLM:
                         trial=trial,
                         max_tokens=max_tokens or self.max_tokens,
                     )
-                    self.calls += 1
-                except Exception as exc:  # noqa: BLE001 — provider errors are heterogeneous
-                    last_err = exc
-                    await asyncio.sleep(min(2**attempt, 8))
-                    continue
+                self.calls += 1
+            except Exception as exc:  # noqa: BLE001 — provider errors are heterogeneous
+                last_err = exc
+                if not is_retryable(exc):
+                    raise LLMError(
+                        f"{self.provider}:{self.model} failed permanently: {exc}"
+                    ) from exc
+                await asyncio.sleep(min(2**attempt, 8))
+                continue
             try:
                 resp = self._finish(text, response_model, cached=False)
             except LLMError as exc:
@@ -194,6 +247,9 @@ class LLM:
 
 
 # --------------------------------------------------------------------------- OpenAI
+_OPENAI_REASONING = re.compile(r"^(o\d|gpt-5)", re.I)
+
+
 class OpenAILLM(LLM):
     """OpenAI-compatible chat completions (works with vLLM, Ollama, ALCF endpoints...)."""
 
@@ -220,9 +276,12 @@ class OpenAILLM(LLM):
         self._json_mode_ok = True
 
     async def _complete(self, messages, *, temperature, json_mode, task, trial, max_tokens):
-        kwargs: dict[str, Any] = dict(
-            model=self.model, messages=messages, temperature=temperature, max_tokens=max_tokens
-        )
+        kwargs: dict[str, Any] = dict(model=self.model, messages=messages)
+        if _OPENAI_REASONING.match(self.model):
+            # o-series / gpt-5 reject sampling parameters and use max_completion_tokens
+            kwargs["max_completion_tokens"] = max_tokens
+        else:
+            kwargs.update(temperature=temperature, max_tokens=max_tokens)
         if trial:
             kwargs["seed"] = trial
         if json_mode and self._json_mode_ok:

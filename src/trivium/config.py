@@ -46,10 +46,25 @@ class ModelSpec(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
     def key(self) -> str:
+        """Identity of the client instance: every field that changes behaviour."""
         opts = json.dumps(self.options, sort_keys=True)
-        return f"{self.provider}|{self.model}|{self.base_url}|{self.temperature}|{self.mock_skill}|{opts}"
+        return "|".join(
+            str(x)
+            for x in (
+                self.provider,
+                self.model,
+                self.base_url,
+                self.api_key_env,
+                self.temperature,
+                self.max_tokens,
+                self.max_concurrency,
+                self.mock_skill,
+                opts,
+            )
+        )
 
     def merged(self, override: dict[str, Any] | ModelSpec | None) -> ModelSpec:
+        """Return a validated copy with ``override`` applied; ``options`` dicts are merged."""
         if override is None:
             return self
         data = (
@@ -57,7 +72,8 @@ class ModelSpec(BaseModel):
             if isinstance(override, ModelSpec)
             else dict(override)
         )
-        return self.model_copy(update=data)
+        merged_opts = {**self.options, **(data.pop("options", None) or {})}
+        return ModelSpec.model_validate({**self.model_dump(), **data, "options": merged_opts})
 
 
 class EmbeddingSpec(BaseModel):
@@ -192,6 +208,10 @@ class GenerationConfig(BaseModel):
         quotas = [q for q in (self.easy, self.medium, self.hard) if q is not None]
         if quotas and self.num_questions is None:
             self.num_questions = sum(quotas)
+        elif quotas and self.num_questions is not None and sum(quotas) > self.num_questions:
+            raise ValueError(
+                f"difficulty quotas sum to {sum(quotas)} but num_questions is {self.num_questions}"
+            )
         return self
 
     def difficulty_quota(self) -> dict[str, int] | None:
@@ -227,19 +247,28 @@ class Config(BaseModel):
         if path is not None:
             with open(path, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh) or {}
+        # precedence: explicit overrides (CLI) > environment > YAML file > defaults
+        data = _deep_update(data, _env_overrides())
         data = _deep_update(data, overrides)
-        cfg = cls.model_validate(data)
-        cfg._apply_env()
-        return cfg
+        return cls.model_validate(data)
 
-    def _apply_env(self) -> None:
-        """Environment overrides for the default model (convenient for CI / ALCF)."""
-        if os.environ.get("TRIVIUM_PROVIDER"):
-            self.models.default.provider = os.environ["TRIVIUM_PROVIDER"]
-        if os.environ.get("TRIVIUM_MODEL"):
-            self.models.default.model = os.environ["TRIVIUM_MODEL"]
-        if os.environ.get("TRIVIUM_BASE_URL"):
-            self.models.default.base_url = os.environ["TRIVIUM_BASE_URL"]
+    def public_dump(self) -> dict[str, Any]:
+        """Config as embedded in output datasets: no paths, no per-user credentials."""
+        data = self.model_dump(mode="json", exclude={"inputs", "output", "jsonl_dir"})
+        models = data.get("models", {})
+        specs = [models.get("default", {})] + list(models.get("roles", {}).values())
+        for spec in specs:
+            opts = spec.get("options") if isinstance(spec, dict) else None
+            if isinstance(opts, dict):
+                for k in list(opts):
+                    if k in _SENSITIVE_OPTIONS:
+                        opts[k] = "<redacted>"
+        emb_opts = models.get("embeddings", {}).get("options")
+        if isinstance(emb_opts, dict):
+            for k in list(emb_opts):
+                if k in _SENSITIVE_OPTIONS:
+                    emb_opts[k] = "<redacted>"
+        return data
 
     @property
     def cache_path(self) -> Path:
@@ -251,6 +280,22 @@ class Config(BaseModel):
 
     def to_yaml(self) -> str:
         return yaml.safe_dump(self.model_dump(mode="json"), sort_keys=False)
+
+
+_SENSITIVE_OPTIONS = {"user", "api_key", "token", "password", "secret"}
+
+
+def _env_overrides() -> dict[str, Any]:
+    """``TRIVIUM_PROVIDER`` / ``TRIVIUM_MODEL`` / ``TRIVIUM_BASE_URL`` for the default model."""
+    default: dict[str, Any] = {}
+    for env, field in (
+        ("TRIVIUM_PROVIDER", "provider"),
+        ("TRIVIUM_MODEL", "model"),
+        ("TRIVIUM_BASE_URL", "base_url"),
+    ):
+        if os.environ.get(env):
+            default[field] = os.environ[env]
+    return {"models": {"default": default}} if default else {}
 
 
 def _deep_update(base: dict[str, Any], upd: dict[str, Any]) -> dict[str, Any]:

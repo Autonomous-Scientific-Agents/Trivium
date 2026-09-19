@@ -18,6 +18,7 @@ from trivium.evaluation.retrieval import RetrievalProbe
 from trivium.facts.store import FactStore
 from trivium.generation.base import Candidate
 from trivium.ingestion.models import Chunk
+from trivium.models.llm import LLMError
 from trivium.models.registry import ModelRegistry
 from trivium.prompts import PROMPT_VERSION
 
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 
 
 class Evaluation(BaseModel):
+    error: str | None = None  # set when evaluation could not be completed (infrastructure)
     answerability: float | None = None
     evidence_entailment: float | None = None
     clarity: float | None = None
@@ -148,7 +150,32 @@ class Evaluator:
             total_w += weight
         return round(score / total_w, 4) if total_w else 0.0
 
+    def is_duplicate(
+        self, cand: Candidate, sim: float, overlap: float, nearest: Candidate | None
+    ) -> bool:
+        """Single duplicate rule used both by :meth:`evaluate` and by the controller's
+        same-round re-check: embedding similarity above threshold, or full fact overlap with a
+        same-strategy question that is at least moderately similar."""
+        return sim >= self.t.duplicate_similarity or (
+            overlap >= 1.0
+            and nearest is not None
+            and nearest.strategy == cand.strategy
+            and sim >= 0.6
+        )
+
     async def evaluate(self, cand: Candidate) -> EvaluatedCandidate:
+        """Evaluate a candidate; infrastructure failures yield ``evaluation_error`` instead of
+        being misreported as model failures or aborting the run."""
+        try:
+            return await self._evaluate(cand)
+        except LLMError as exc:
+            log.error("evaluation of %s failed: %s", cand.id, exc)
+            ev = Evaluation(reasoning_depth=cand.reasoning_depth)
+            ev.rejection_reasons.append("evaluation_error")
+            ev.error = str(exc)[:500]
+            return self._finish(cand, ev)
+
+    async def _evaluate(self, cand: Candidate) -> EvaluatedCandidate:
         ev = Evaluation(reasoning_depth=cand.reasoning_depth)
         reasons = ev.rejection_reasons
         evidence = self.evidence_texts(cand)
@@ -172,12 +199,7 @@ class Evaluator:
         ev.fact_overlap_with_existing = round(overlap, 4)
         ev.nearest_question_id = nearest.id if nearest else None
         ev.novelty = round(max(0.0, 1.0 - max(sim, 0.6 * overlap)), 4)
-        if sim >= self.t.duplicate_similarity or (
-            overlap >= 1.0
-            and nearest is not None
-            and nearest.strategy == cand.strategy
-            and sim >= 0.6
-        ):
+        if self.is_duplicate(cand, sim, overlap, nearest):
             reasons.append("duplicate")
         if reasons:
             return self._finish(cand, ev)
@@ -217,6 +239,7 @@ class Evaluator:
             evidence=evidence,
             trials=ecfg.open_book_trials,
             judge=self._judge,
+            max_words=self.cfg.generation.max_answer_words,
         )
         closed_task = accuracy(
             self.models["closed_book"],
@@ -224,6 +247,7 @@ class Evaluator:
             evidence=None,
             trials=ecfg.closed_book_trials,
             judge=self._judge,
+            max_words=self.cfg.generation.max_answer_words,
         )
         (
             (ev.open_book_accuracy, ev.open_book_answers),
@@ -258,7 +282,12 @@ class Evaluator:
         tier_results = await asyncio.gather(
             *(
                 accuracy(
-                    llm, cand, evidence=evidence, trials=ecfg.difficulty_trials, judge=self._judge
+                    llm,
+                    cand,
+                    evidence=evidence,
+                    trials=ecfg.difficulty_trials,
+                    judge=self._judge,
+                    max_words=self.cfg.generation.max_answer_words,
                 )
                 for llm in tiers.values()
             )

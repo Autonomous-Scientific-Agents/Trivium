@@ -47,6 +47,8 @@ def perturb_number(value: float, rng, *, text: str = "", unit: str | None = None
     if value == 0:
         return rng.choice([1.0, -1.0, 0.5])
     factor = rng.choice([0.6, 0.75, 0.85, 1.15, 1.3, 1.6])
+    if unit and unit.strip().lower() in ("%", "percent", "percentage") and value * factor > 100:
+        factor = rng.choice([0.6, 0.75, 0.85])  # keep percentages within [0, 100]
     new = value * factor
     decimals = _decimals(text)
     if decimals:
@@ -55,6 +57,10 @@ def perturb_number(value: float, rng, *, text: str = "", unit: str | None = None
         # keep integer-ness and roughly the same number of significant digits
         mag = 10 ** max(0, len(str(int(abs(value)))) - 2)
         new = float(round(new / mag) * mag)
+        if new == value:  # rounding collapsed the change: step one unit instead
+            new = value + (mag if factor > 1 else -mag)
+            if new <= 0:
+                new = value + mag
     else:
         new = float(f"{new:.3g}")
     return new if new != value else value * 1.5

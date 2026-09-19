@@ -83,6 +83,12 @@ class ModelRegistry:
     def total_calls(self) -> int:
         return sum(llm.calls for llm in self._by_spec.values())
 
+    async def aclose(self) -> None:
+        """Close network clients (call from within the event loop, before :meth:`close`)."""
+        for llm in self._by_spec.values():
+            await llm.aclose()
+        await self.embedder.aclose()
+
     def close(self) -> None:
         if self.cache is not None:
             self.cache.close()

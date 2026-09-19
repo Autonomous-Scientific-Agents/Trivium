@@ -20,7 +20,9 @@ def _fmt(x: float) -> str:
     if x == 0:
         return "0"
     digits = max(0, 3 - int(math.floor(math.log10(abs(x)))))
-    s = f"{round(x, digits):.{digits}f}".rstrip("0").rstrip(".")
+    s = f"{round(x, digits):.{digits}f}"
+    if "." in s:  # only strip fractional zeros: 1200 must stay "1200"
+        s = s.rstrip("0").rstrip(".")
     return s if s not in ("", "-0") else "0"
 
 
@@ -28,7 +30,14 @@ class DerivedGenerator(Generator):
     name = "derived"
     reasoning_depth = 2
 
+    _pairs: list[tuple[Fact, Fact]] | None = None
+
     def pairs(self) -> list[tuple[Fact, Fact]]:
+        if self._pairs is None:  # the store is static after extraction
+            self._pairs = self._compute_pairs()
+        return self._pairs
+
+    def _compute_pairs(self) -> list[tuple[Fact, Fact]]:
         out = []
         for g in comparable_groups(self.ctx.store.all()):
             for i in range(len(g)):

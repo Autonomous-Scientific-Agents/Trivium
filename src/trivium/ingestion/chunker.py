@@ -19,20 +19,60 @@ def _is_heading_only(paragraph: str, section_title: str) -> bool:
     return paragraph.startswith("#") or stripped.lower() == section_title.lower()
 
 
-def _split_long(text: str, max_chars: int) -> list[str]:
+def _split_long(text: str, max_chars: int) -> list[tuple[int, str]]:
+    """Split ``text`` into pieces of at most ``max_chars`` characters.
+
+    Returns ``(offset, piece)`` pairs where ``offset`` is relative to ``text``, so callers can
+    compute exact document offsets without searching. Splits at sentence boundaries; a single
+    sentence longer than ``max_chars`` is split at word boundaries.
+    """
     if len(text) <= max_chars:
-        return [text]
-    out: list[str] = []
-    cur = ""
-    for sent in _SENT_SPLIT.split(text):
-        if cur and len(cur) + len(sent) + 1 > max_chars:
-            out.append(cur)
-            cur = sent
-        else:
-            cur = f"{cur} {sent}".strip()
-    if cur:
-        out.append(cur)
-    return out
+        return [(0, text)]
+    # sentence spans (offset, sentence) preserving original positions
+    sentences: list[tuple[int, str]] = []
+    pos = 0
+    for m in _SENT_SPLIT.finditer(text):
+        sentences.append((pos, text[pos : m.start()]))
+        pos = m.end()
+    sentences.append((pos, text[pos:]))
+    # break over-long sentences at word boundaries
+    units: list[tuple[int, str]] = []
+    for off, sent in sentences:
+        if len(sent) <= max_chars:
+            units.append((off, sent))
+            continue
+        start = 0
+        while start < len(sent):
+            end = min(start + max_chars, len(sent))
+            if end < len(sent):
+                cut = sent.rfind(" ", start, end)
+                if cut > start:
+                    end = cut
+            units.append((off + start, sent[start:end]))
+            start = end
+    # pack units greedily into pieces that stay within the original text
+    out: list[tuple[int, str]] = []
+    cur_start: int | None = None
+    cur_end = 0
+    for off, unit in units:
+        if not unit.strip():
+            continue
+        if cur_start is not None and (off + len(unit)) - cur_start > max_chars:
+            out.append((cur_start, text[cur_start:cur_end]))
+            cur_start = None
+        if cur_start is None:
+            cur_start = off
+        cur_end = off + len(unit)
+    if cur_start is not None:
+        out.append((cur_start, text[cur_start:cur_end]))
+    return [
+        (o, piece.strip()) if piece == piece.strip() else _restrip(o, piece) for o, piece in out
+    ]
+
+
+def _restrip(offset: int, piece: str) -> tuple[int, str]:
+    lead = len(piece) - len(piece.lstrip())
+    return offset + lead, piece.strip()
 
 
 def chunk_document(doc: Document, cfg: ChunkingConfig | None = None) -> list[Chunk]:
@@ -48,12 +88,12 @@ def chunk_document(doc: Document, cfg: ChunkingConfig | None = None) -> list[Chu
             if idx < 0:
                 idx = pos
             pos = idx + len(para)
+            lead = len(para) - len(para.lstrip())
             p = para.strip()
             if not p or _is_heading_only(p, sec.title):
                 continue
-            for piece in _split_long(p, cfg.max_chars):
-                pidx = sec_text.find(piece, idx)
-                start = sec.start_char + (pidx if pidx >= 0 else idx)
+            for rel, piece in _split_long(p, cfg.max_chars):
+                start = sec.start_char + idx + lead + rel
                 paras.append((start, start + len(piece), piece))
 
         # pack paragraphs up to target size

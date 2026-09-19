@@ -96,15 +96,30 @@ async def extract_chunk(llm: LLM, chunk: Chunk, cfg: ExtractionConfig) -> list[F
         log.warning("fact extraction failed for %s: %s", chunk.id, exc)
         return []
     out: list[Fact] = []
+    haystack = _squash(chunk.text)
+    dropped = 0
     for i, ex in enumerate(resp.parsed.facts[: cfg.max_facts_per_chunk]):  # type: ignore[union-attr]
         if not ex.subject or not ex.object or not ex.evidence:
+            continue
+        if _squash(ex.evidence) not in haystack:
+            dropped += 1  # hallucinated or paraphrased "quote": provenance would be unverifiable
             continue
         if looks_unresolved(ex.subject):
             continue
         if ex.confidence < cfg.min_confidence:
             continue
         out.append(_make_fact(ex, chunk, i))
+    if dropped:
+        log.info(
+            "%s: dropped %d fact(s) whose evidence is not a quote from the chunk", chunk.id, dropped
+        )
     return out
+
+
+def _squash(text: str) -> str:
+    """Whitespace/case/quote-insensitive form for verifying that a quote occurs in a chunk."""
+    t = text.lower().replace("\u201c", '"').replace("\u201d", '"').replace("\u2019", "'")
+    return " ".join(t.split()).strip(" .\"'")
 
 
 async def extract_facts(

@@ -27,6 +27,15 @@ class Embedder:
     async def embed_one(self, text: str) -> np.ndarray:
         return (await self.embed([text]))[0]
 
+    async def aclose(self) -> None:
+        """Release network resources (no-op for local embedders)."""
+        client = getattr(self, "_client", None)
+        fn = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if fn is not None:
+            res = fn()
+            if asyncio.iscoroutine(res):
+                await res
+
 
 def cosine_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     if a.size == 0 or b.size == 0:
@@ -103,8 +112,11 @@ class OpenAIEmbedder(Embedder):
                 todo.append(i)
         for start in range(0, len(todo), self.batch_size):
             idx = todo[start : start + self.batch_size]
-            resp = await self._client.embeddings.create(
-                model=self.model, input=[texts[i] for i in idx]
+            resp = await with_retries(
+                self._client.embeddings.create,
+                what=f"openai embeddings ({self.model})",
+                model=self.model,
+                input=[texts[i] for i in idx],
             )
             for j, d in zip(idx, resp.data, strict=True):
                 vec = np.asarray(d.embedding, dtype=np.float32)
@@ -138,12 +150,28 @@ class SentenceTransformerEmbedder(Embedder):
         return _normalise(np.asarray(arr, dtype=np.float32))
 
 
+async def with_retries(fn, *args, attempts: int = 3, what: str = "embedding call", **kwargs):
+    """Await ``fn(*args, **kwargs)`` with exponential backoff on transient errors."""
+    from trivium.models.llm import LLMError, is_retryable
+
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return await fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — provider errors are heterogeneous
+            last = exc
+            if not is_retryable(exc) or attempt == attempts - 1:
+                break
+            await asyncio.sleep(min(2**attempt, 8))
+    raise LLMError(f"{what} failed after {attempts} attempts: {last}") from last
+
+
 def build_embedder(
     provider: str, model: str | None = None, *, cache: ResponseCache | None = None, **kw: Any
 ) -> Embedder:
     provider = (provider or "hashing").lower()
     if provider in ("hashing", "local-hash", "mock"):
-        return HashingEmbedder()
+        return HashingEmbedder(**{k: v for k, v in kw.items() if k == "dim"})
     if provider in ("openai", "openai-compatible"):
         return OpenAIEmbedder(model or "text-embedding-3-small", cache=cache, **kw)
     if provider == "argo":

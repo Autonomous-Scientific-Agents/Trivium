@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from pydantic import BaseModel
 
@@ -10,6 +11,8 @@ from trivium.evaluation.grading import is_correct
 from trivium.generation.base import Candidate
 from trivium.models.llm import LLM, LLMError
 from trivium.prompts import build_messages
+
+log = logging.getLogger(__name__)
 
 
 class ShortAnswer(BaseModel):
@@ -37,7 +40,7 @@ def _format_question(cand: Candidate) -> str:
 
 async def _trial(
     llm: LLM, cand: Candidate, evidence: list[str] | None, trial: int, max_words: int
-) -> str:
+) -> str | None:
     if evidence is None:
         msgs = build_messages(
             CLOSED_SYSTEM,
@@ -57,8 +60,11 @@ async def _trial(
             msgs, ShortAnswer, task=task, trial=trial, temperature=0.7 if trial else None
         )
         return resp.parsed.answer  # type: ignore[union-attr]
-    except LLMError:
-        return ""
+    except LLMError as exc:
+        # None marks an infrastructure failure; the caller decides how to treat it. Returning ""
+        # would count an outage as a wrong answer and distort accuracies.
+        log.warning("%s trial %d failed: %s", task, trial, exc)
+        return None
 
 
 async def accuracy(
@@ -72,9 +78,19 @@ async def accuracy(
 ) -> tuple[float, list[str]]:
     """Fraction of trials whose answer matches the reference; also returns the raw answers."""
     trials = max(1, trials)
-    answers = await asyncio.gather(
-        *(_trial(llm, cand, evidence, t, max_words) for t in range(trials))
-    )
+    raw = await asyncio.gather(*(_trial(llm, cand, evidence, t, max_words) for t in range(trials)))
+    answers = [a for a in raw if a is not None]
+    if not answers:
+        raise LLMError(
+            f"all {trials} {'open' if evidence else 'closed'}-book trials failed for {cand.id}"
+        )
+    if len(answers) < trials:
+        log.warning(
+            "%d/%d trials failed for %s; accuracy uses the rest",
+            trials - len(answers),
+            trials,
+            cand.id,
+        )
     refs = cand.all_answers()
     verdicts = await asyncio.gather(
         *(
@@ -82,4 +98,4 @@ async def accuracy(
             for a in answers
         )
     )
-    return sum(verdicts) / trials, list(answers)
+    return sum(verdicts) / len(answers), answers

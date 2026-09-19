@@ -110,13 +110,13 @@ class StrategySelector:
                     w[s] *= 0.4
         # true/false share follows the requested type ratio
         if "true_false" in w:
-            want = self._type_target("true_false")
+            want = self.type_target("true_false")
             share = report.type_distribution.get("true_false", 0) / n_acc
             w["true_false"] *= 2.0 if share < want else (0.3 if share > 1.3 * want else 1.0)
         total = sum(w.values())
         return {s: v / total for s, v in w.items()} if total else {}
 
-    def _type_target(self, qtype: str) -> float:
+    def type_target(self, qtype: str) -> float:
         types = [t.value for t in self.cfg.question_types]
         if self.cfg.type_ratio and qtype in self.cfg.type_ratio:
             return self.cfg.type_ratio[qtype]

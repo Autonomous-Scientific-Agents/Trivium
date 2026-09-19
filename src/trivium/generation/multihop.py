@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from trivium.facts.store import norm
 from trivium.generation.base import Candidate, Generator
@@ -19,11 +20,15 @@ class MultiHopGenerator(Generator):
     reasoning_depth = 2
     cross_document: bool | None = None
 
+    _paths: list[tuple[Edge, Edge]] | None = None
+
     def paths(self) -> list[tuple[Edge, Edge]]:
-        paths = self.ctx.graph.two_hop_paths()
-        if self.cross_document is True:
-            paths = [p for p in paths if p[0].document_id != p[1].document_id]
-        return paths
+        if self._paths is None:  # the graph is static after extraction
+            paths = self.ctx.graph.two_hop_paths()
+            if self.cross_document is True:
+                paths = [p for p in paths if p[0].document_id != p[1].document_id]
+            self._paths = paths
+        return self._paths
 
     def available(self) -> bool:
         return bool(self.paths())
@@ -60,7 +65,7 @@ class MultiHopGenerator(Generator):
         if gq is None:
             return None
         q = norm(gq.question)
-        if norm(bridge) in q or norm(answer) in q:
+        if _mentions(q, bridge) or _mentions(q, answer):
             return None  # bridge or answer leaked → not really multi-hop
         return self.ctx.make_candidate(
             gq,
@@ -69,3 +74,9 @@ class MultiHopGenerator(Generator):
             reasoning_depth=2,
             graph_path=[f1.subject, f1.predicate, bridge, f2.predicate, answer],
         )
+
+
+def _mentions(question: str, phrase: str) -> bool:
+    """Whole-token containment: "5" is not mentioned by "2015", "ANI" not by "ANI-1x"."""
+    p = re.escape(norm(phrase))
+    return bool(p) and re.search(rf"(?<![\w-]){p}(?![\w-])", norm(question)) is not None

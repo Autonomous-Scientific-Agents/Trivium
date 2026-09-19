@@ -28,7 +28,7 @@ from typing import Any
 import numpy as np
 
 from trivium.models.cache import ResponseCache, stable_hash
-from trivium.models.embeddings import Embedder, _normalise
+from trivium.models.embeddings import Embedder, _normalise, with_retries
 from trivium.models.llm import LLM
 
 ARGO_BASES = {
@@ -59,7 +59,10 @@ def resolve_user(user: str | None, user_env: str) -> str:
 def resolve_base(env: str | None, base_url: str | None) -> str:
     if base_url:
         return base_url.rstrip("/")
-    return ARGO_BASES[(env or "prod").lower()]
+    key = (env or "prod").lower()
+    if key not in ARGO_BASES:
+        raise ArgoConfigError(f"unknown Argo env {env!r}; expected one of {sorted(ARGO_BASES)}")
+    return ARGO_BASES[key]
 
 
 def _client_kwargs(timeout: float) -> dict[str, Any]:
@@ -140,9 +143,8 @@ class ArgoLLM(LLM):
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        if json_mode and not _REASONING.match(self.model):
-            # No response_format on the native endpoint; rely on the schema instruction + repair loop.
-            pass
+        # The native endpoint has no response_format; JSON output relies on the schema
+        # instruction and the repair loop in LLM.generate.
         resp = await self._client.post(self.url, json=payload)
         if resp.status_code >= 400:
             raise RuntimeError(f"Argo HTTP {resp.status_code}: {resp.text[:300]}")
@@ -181,7 +183,7 @@ class ArgoEmbedder(Embedder):
     def _key(self, text: str) -> str:
         return stable_hash({"argo_emb": self.model, "text": text})
 
-    async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+    async def _post(self, texts: list[str]) -> list[list[float]]:
         async with self._sem:
             resp = await self._client.post(
                 self.url, json={"user": self.user, "model": self.model, "prompt": texts}
@@ -189,6 +191,12 @@ class ArgoEmbedder(Embedder):
         if resp.status_code >= 400:
             raise RuntimeError(f"Argo embed HTTP {resp.status_code}: {resp.text[:300]}")
         return parse_embed_response(resp.json(), len(texts))
+
+    async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return await with_retries(self._post, texts, what=f"argo embeddings ({self.model})")
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def embed(self, texts: list[str]) -> np.ndarray:
         out: list[list[float] | None] = [None] * len(texts)

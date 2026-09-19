@@ -81,6 +81,12 @@ Providers: `openai` (any OpenAI-compatible server: OpenAI, vLLM, Ollama, ALCF in
 endpoints via `base_url`), `anthropic`, `argo` (Argonne's Argo Gateway, see below), and `mock`
 (deterministic, offline). Environment overrides: `TRIVIUM_PROVIDER`, `TRIVIUM_MODEL`, `TRIVIUM_BASE_URL`.
 
+**Avoid self-evaluation.** By default the question generator, quality evaluator, open-book
+answerer and large difficulty tier all resolve to `models.default`, so a model grades its own
+questions. For datasets you intend to publish, set `roles.quality_evaluator`, `roles.judge` and
+`roles.open_book` to a model from a different family than `question_generator`
+(e.g. generate with `gpt41`, evaluate with `claudesonnet45`).
+
 ### Argo Gateway (Argonne)
 
 The `argo` provider talks to the native Argo endpoints (chat + embeddings), so it works against

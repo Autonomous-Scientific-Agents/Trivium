@@ -16,7 +16,7 @@ from trivium.config import Config
 
 def _common_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--config", help="YAML config file (see examples/config.yaml)")
-    p.add_argument("--provider", help="default LLM provider: openai | anthropic | mock")
+    p.add_argument("--provider", help="default LLM provider: openai | anthropic | argo | mock")
     p.add_argument("--model", help="default model name for all roles")
     p.add_argument("--base-url", help="OpenAI-compatible endpoint URL")
     p.add_argument("--no-cache", action="store_true", help="disable the on-disk response cache")
@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command", required=True)
 
     g = sub.add_parser("generate", help="generate a question dataset from documents or a topic")
-    src = g.add_mutually_exclusive_group(required=True)
+    src = g.add_mutually_exclusive_group()  # may also come from the YAML config (inputs:/topic:)
     src.add_argument("--input", "-i", nargs="+", help="files or directories (.txt .md .pdf .html)")
     src.add_argument("--topic", help="topic string; sources are acquired from Wikipedia")
     g.add_argument(
@@ -138,6 +138,10 @@ def cmd_generate(args: argparse.Namespace) -> int:
     from trivium.orchestration.controller import generate_dataset
 
     cfg = Config.load(args.config, **_overrides(args))
+    if not cfg.inputs and not cfg.topic:
+        raise SystemExit(
+            "generate: provide --input/--topic or set inputs:/topic: in the config file"
+        )
     dataset, run = asyncio.run(generate_dataset(cfg))
     m = dataset.dataset_metrics
     print(
@@ -165,6 +169,10 @@ def cmd_extract(args: argparse.Namespace) -> int:
     from trivium.orchestration.controller import build_knowledge_base, load_documents
 
     cfg = Config.load(args.config, **_overrides(args))
+    if not cfg.inputs and not cfg.topic:
+        raise SystemExit(
+            "extract: provide --input/--topic or set inputs:/topic: in the config file"
+        )
 
     async def _run() -> int:
         models = ModelRegistry(cfg)
@@ -172,6 +180,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             docs = await load_documents(cfg)
             chunks, store = await build_knowledge_base(cfg, models, docs)
         finally:
+            await models.aclose()
             models.close()
         store.save_jsonl(args.output)
         print(

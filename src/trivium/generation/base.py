@@ -104,6 +104,8 @@ class GenerationContext:
 
     # ---------------------------------------------------------- fact sampling
     def fact_weight(self, fact: Fact) -> float:
+        if fact.id in self.feedback.overused_fact_ids:
+            return 0.05  # coverage feedback: already used by several accepted questions
         w = 0.25 + fact.quality_score
         uses = self.used_facts.get(fact.id, 0)
         w /= 1.0 + 2.0 * uses
@@ -254,9 +256,18 @@ class Generator:
             log.warning("%s: question generation failed: %s", self.name, exc)
             return None
         gq: GeneratedQuestion = resp.parsed  # type: ignore[assignment]
-        if fixed_answer is not None and not answers_match(gq.answer, fixed_answer):
-            # the phrasing model must not change a deterministically derived answer
-            gq.accepted_answers = [a for a in [gq.answer, *gq.accepted_answers] if a]
+        if fixed_answer is not None:
+            # the phrasing model must never change a deterministically derived answer; its own
+            # phrasing is kept as an accepted alias only when it is equivalent
+            if answers_match(gq.answer, fixed_answer):
+                gq.accepted_answers = [a for a in [gq.answer, *gq.accepted_answers] if a]
+            else:
+                log.debug(
+                    "LLM answer %r differs from fixed answer %r; overriding",
+                    gq.answer,
+                    fixed_answer,
+                )
+                gq.accepted_answers = []
             gq.answer = fixed_answer
         if len(gq.answer.split()) > ctx.max_answer_words or not gq.question.strip():
             return None
@@ -267,8 +278,18 @@ _WORD = re.compile(r"[a-z0-9.]+")
 
 
 def answers_match(a: str, b: str) -> bool:
+    """Token-based equivalence of two short answers.
+
+    Equal after normalisation, or one token sequence is a contiguous *token* sub-sequence of the
+    other ("0.12" vs "0.12 ev"). Plain substring tests are not used: "2.5" ≠ "12.5", "no" ≠ "know".
+    """
     na, nb = norm(a), norm(b)
     if na == nb:
         return True
     ta, tb = _WORD.findall(na), _WORD.findall(nb)
-    return bool(ta) and (ta == tb or " ".join(ta) in " ".join(tb) or " ".join(tb) in " ".join(ta))
+    if not ta or not tb:
+        return False
+    short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    if len(long_) > len(short) + 3:  # a qualifier or two at most
+        return False
+    return any(long_[i : i + len(short)] == short for i in range(len(long_) - len(short) + 1))
