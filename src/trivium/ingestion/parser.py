@@ -42,6 +42,45 @@ def clean_text(raw: str) -> str:
     return text.strip() + "\n"
 
 
+_TITLE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "via",
+    "vs",
+    "with",
+}
+
+
+def _looks_like_title(text: str) -> bool:
+    """Section titles are short and mostly capitalised; a wrapped sentence fragment such as
+    "The number of eigenvalues in each slice should be close" is not a heading."""
+    words = text.split()
+    if not words or len(words) > 10:
+        return False
+    content = [w for w in words if w.lower() not in _TITLE_STOPWORDS]
+    if not content:
+        return False
+    lower = sum(1 for w in content if w[0].islower())
+    return lower / len(content) <= 0.5
+
+
+def _plausible_section_number(num: str) -> bool:
+    """ "1806 Journal of …" is a page number, not section 1806."""
+    return int(num.split(".")[0]) <= 50
+
+
 def detect_heading(line: str) -> tuple[int, str] | None:
     s = line.strip()
     if not s or len(s) > 120:
@@ -50,7 +89,12 @@ def detect_heading(line: str) -> tuple[int, str] | None:
     if m:
         return len(m.group(1)), m.group(2).strip()
     m = _NUMBERED_HEADING.match(s)
-    if m and not s.endswith("."):
+    if (
+        m
+        and not s.endswith(".")
+        and _looks_like_title(m.group(2))
+        and _plausible_section_number(m.group(1))
+    ):
         return m.group(1).count(".") + 1, m.group(2).strip()
     if s.lower().rstrip(":") in _KNOWN_HEADINGS:
         return 1, s.rstrip(":").title()

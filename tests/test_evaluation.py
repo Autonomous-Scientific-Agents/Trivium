@@ -148,3 +148,19 @@ async def test_difficulty_tiers_drive_labels(knowledge_base, skill, expected):
     assert res.evaluation.accepted
     assert res.evaluation.difficulty == expected and res.evaluation.difficulty_method == "tiers"
     assert res.evaluation.tier_accuracy["large"] == 1.0
+
+
+async def test_yes_no_answers_rejected_for_non_boolean(models, knowledge_base, ctx):
+    _, chunks, store = knowledge_base
+    ev = Evaluator(ctx.config, models, store, chunks)
+    f = next(iter(store))
+    cand = Candidate(
+        id="yn",
+        question="Can symbolic factorizations be reused?",
+        answer="Yes",
+        source_fact_ids=[f.id],
+        source_chunk_ids=[f.chunk_id],
+        strategy="atomic",
+    )
+    res = await ev.evaluate(cand)
+    assert "yes_no_answer" in res.evaluation.rejection_reasons

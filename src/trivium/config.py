@@ -192,6 +192,12 @@ class GenerationConfig(BaseModel):
     patience: int = 4  # rounds without an acceptance before stopping (exhaustion)
     min_novelty: float = 0.15  # stop when candidate novelty stays below this
     max_candidates: int | None = None  # optional cost budget
+    # best-of selection (CLI --best K): generate an accepted pool, rank it, keep the top-k
+    select_top: int | None = None
+    select_by: str | None = None  # challenge | interest | trivia | quality (None → by mode)
+    pool_factor: int = 8  # pool size = max(10, pool_factor * select_top) when num_questions unset
+    # steer the adaptive loop toward a difficulty from round one (implied "hard" by select_top)
+    prefer_difficulty: str | None = None
     strategy_weights: dict[str, float] = Field(
         default_factory=lambda: {
             "atomic": 0.25,
@@ -212,6 +218,30 @@ class GenerationConfig(BaseModel):
             raise ValueError(
                 f"difficulty quotas sum to {sum(quotas)} but num_questions is {self.num_questions}"
             )
+        if self.select_top is not None:
+            if self.select_top < 1:
+                raise ValueError("select_top must be >= 1")
+            if self.num_questions is None:
+                self.num_questions = min(
+                    self.max_questions, max(10, self.pool_factor * self.select_top)
+                )
+            elif self.num_questions < self.select_top:
+                raise ValueError("num_questions (the pool) must be >= select_top")
+            if self.prefer_difficulty is None:
+                self.prefer_difficulty = "hard"
+        if self.prefer_difficulty is not None and self.prefer_difficulty not in (
+            "easy",
+            "medium",
+            "hard",
+        ):
+            raise ValueError("prefer_difficulty must be easy, medium or hard")
+        if self.select_by is not None and self.select_by not in (
+            "challenge",
+            "interest",
+            "trivia",
+            "quality",
+        ):
+            raise ValueError("select_by must be challenge, interest, trivia or quality")
         return self
 
     def difficulty_quota(self) -> dict[str, int] | None:
@@ -269,6 +299,13 @@ class Config(BaseModel):
                 if k in _SENSITIVE_OPTIONS:
                     emb_opts[k] = "<redacted>"
         return data
+
+    @property
+    def effective_select_by(self) -> str:
+        """``generation.select_by`` or the mode default (trivia → hard *and* interesting)."""
+        if self.generation.select_by:
+            return self.generation.select_by
+        return "trivia" if self.mode == Mode.trivia else "challenge"
 
     @property
     def cache_path(self) -> Path:

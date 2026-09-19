@@ -142,6 +142,12 @@ class GenerationContext:
         return chosen
 
     def evidence_for(self, facts: list[Fact]) -> list[dict[str, str]]:
+        """Facts as shown to the question writer.
+
+        Internal identifiers (document and section ids) are deliberately omitted: models echo
+        them into questions ("according to the Methods section of doc_2018_…"). Provenance is
+        attached to the candidate from the Fact objects, not from this payload.
+        """
         return [
             {
                 "fact_id": f.id,
@@ -151,10 +157,6 @@ class GenerationContext:
                 "qualifiers": f.qualifiers,
                 "statement": f.statement(),
                 "evidence": f.evidence,
-                "document_id": f.document_id,
-                "section": self.chunks[f.chunk_id].section_title
-                if f.chunk_id in self.chunks
-                else f.section_id,
             }
             for f in facts
         ]
@@ -191,8 +193,11 @@ QUESTION_RULES = """Rules for the question:
 - Include enough context (entity names, dataset, conditions) to make the answer unique, but do not
   restate the answer or use words that give it away.
 - The answer must be at most {max_words} words: a name, number with unit, date, or short phrase.
-- Do not refer to "the text", "the paper", "the document" or "the author"; ask about the content itself.
+- Do not refer to "the text", "the paper", "the document", "the study", "the Methods section" or
+  "the author", and never mention document or fact identifiers; ask about the content itself.
 - Prefer questions a knowledgeable reader could not answer without these specific sources.
+- Never write a yes/no question (do not start with "Is", "Does", "Can", "Do", "Are"); ask for the
+  specific entity, value or property instead. Yes/no is reserved for true/false statements.
 {extra}"""
 
 

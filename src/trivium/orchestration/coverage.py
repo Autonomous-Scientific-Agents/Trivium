@@ -108,6 +108,21 @@ def build_feedback(
             for d, v in open_.items():
                 fb.notes.append(f"{d}: {quota[d] - v}/{quota[d]} accepted so far")
 
+    if fb.target_difficulty is None and gen_cfg.prefer_difficulty:
+        fb.target_difficulty = gen_cfg.prefer_difficulty
+        if gen_cfg.prefer_difficulty == "hard":
+            fb.notes.append(
+                "Prefer questions that require combining facts or multi-step reasoning; avoid "
+                "single-lookup questions whose answer a well-read person would guess."
+            )
+    if gen_cfg.select_by in ("trivia", "interest") or (
+        gen_cfg.select_top and gen_cfg.select_by is None
+    ):
+        fb.notes.append(
+            "Favour surprising, memorable facts (records, firsts, unusual magnitudes, unexpected "
+            "connections between entities) — the kind a good quiz would ask."
+        )
+
     # under-covered sections: many facts, few questions
     ratios = []
     for key, nfacts in report.facts_per_section.items():

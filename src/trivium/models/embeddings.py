@@ -150,7 +150,7 @@ class SentenceTransformerEmbedder(Embedder):
         return _normalise(np.asarray(arr, dtype=np.float32))
 
 
-async def with_retries(fn, *args, attempts: int = 3, what: str = "embedding call", **kwargs):
+async def with_retries(fn, *args, attempts: int = 5, what: str = "embedding call", **kwargs):
     """Await ``fn(*args, **kwargs)`` with exponential backoff on transient errors."""
     from trivium.models.llm import LLMError, is_retryable
 
@@ -162,7 +162,7 @@ async def with_retries(fn, *args, attempts: int = 3, what: str = "embedding call
             last = exc
             if not is_retryable(exc) or attempt == attempts - 1:
                 break
-            await asyncio.sleep(min(2**attempt, 8))
+            await asyncio.sleep(min(2**attempt, 15))  # 1+2+4+8+15 s window
     raise LLMError(f"{what} failed after {attempts} attempts: {last}") from last
 
 

@@ -18,8 +18,10 @@ from trivium.graph.builder import build_graph
 from trivium.ingestion.chunker import chunk_documents
 from trivium.ingestion.loader import load_inputs
 from trivium.ingestion.models import Chunk, Document
+from trivium.models.llm import LLMError
 from trivium.models.registry import ModelRegistry
 from trivium.orchestration import coverage as cov
+from trivium.orchestration import selection
 from trivium.orchestration.stopping import LoopState, estimate_target, should_stop
 from trivium.orchestration.strategy import StrategySelector
 from trivium.output.schema import Dataset, DatasetInfo, QuestionRecord, dataset_metrics
@@ -40,6 +42,8 @@ class GenerationRun:
     target: int = 0
     rounds: int = 0
     stop_reason: str = ""
+    selected_by: str | None = None
+    error: str | None = None  # set when the loop stopped on an infrastructure error
     n_candidates: int = 0
     strategy_stats: dict = field(default_factory=dict)
     llm_calls: int = 0
@@ -68,6 +72,8 @@ class GenerationRun:
             accepted_questions=len(records),
             rounds=self.rounds,
             stop_reason=self.stop_reason,
+            selected_top=self.config.generation.select_top,
+            selected_by=self.selected_by,
             mode=self.config.mode.value,
             models={},
             prompt_version=PROMPT_VERSION,
@@ -167,7 +173,51 @@ class Controller:
         return target
 
     # ------------------------------------------------------------------ loop
+    def _select_best(self) -> None:
+        """Keep the top-k of the accepted pool when ``generation.select_top`` is set."""
+        k = self.cfg.generation.select_top
+        if not k or len(self.run.accepted) <= 0:
+            return
+        by = self.cfg.effective_select_by
+        ordered = selection.rank(self.run.accepted, by)
+        keep, drop = ordered[:k], ordered[k:]
+        for ec in drop:
+            ec.evaluation.accepted = False
+            ec.evaluation.rejection_reasons.append("not_selected")
+            self.run.rejected.append(ec)
+        self.rejections["not_selected"] += len(drop)
+        self.run.accepted = keep
+        self.run.selected_by = by
+        log.info(
+            "selected top %d of %d accepted by %s (scores %s)",
+            len(keep),
+            len(ordered),
+            by,
+            [ec.evaluation.selection_score for ec in keep],
+        )
+
     async def loop(self) -> GenerationRun:
+        """Run the adaptive loop; infrastructure failures stop the loop gracefully so that whatever
+        was accepted is still selected, reported and written."""
+        try:
+            await self._loop()
+        except LLMError as exc:
+            log.error("stopping after infrastructure error: %s", exc)
+            self.run.stop_reason = "infrastructure_error"
+            self.run.error = str(exc)[:500]
+        self._select_best()
+        self.run.strategy_stats = self.selector.summary()
+        self.run.llm_calls = self.models.total_calls()
+        log.info(
+            "stopped: %s after %d rounds; %d accepted from %d candidates",
+            self.run.stop_reason,
+            self.run.rounds,
+            len(self.run.accepted),
+            self.run.n_candidates,
+        )
+        return self.run
+
+    async def _loop(self) -> None:
         g = self.cfg.generation
         state = LoopState()
         quota = g.difficulty_quota()
@@ -178,6 +228,7 @@ class Controller:
                 break
             state.round += 1
             self.ctx.round = state.round
+            self.run.rounds = state.round
             report = cov.analyze(self.run.store, self.run.accepted)
             self.ctx.feedback = cov.build_feedback(report, g, self.rejections, self.run.target)
             weights = self.selector.weights(
@@ -219,9 +270,18 @@ class Controller:
             for ec in evaluated:
                 novelties.append(ec.evaluation.novelty)
                 if ec.evaluation.accepted and len(self.run.accepted) < self.run.target:
-                    sim, overlap, nearest = await self.evaluator.redundancy.assess(
-                        ec.candidate, judge=self.evaluator._judge
-                    )
+                    try:
+                        sim, overlap, nearest = await self.evaluator.redundancy.assess(
+                            ec.candidate, judge=self.evaluator._judge
+                        )
+                    except LLMError as exc:
+                        log.error(
+                            "same-round redundancy check failed for %s: %s", ec.candidate.id, exc
+                        )
+                        ec.evaluation.accepted = False
+                        ec.evaluation.rejection_reasons.append("evaluation_error")
+                        ec.evaluation.error = str(exc)[:500]
+                        sim, overlap, nearest = 0.0, 0.0, None
                     if self.evaluator.is_duplicate(ec.candidate, sim, overlap, nearest):
                         ec.evaluation.accepted = False
                         ec.evaluation.rejection_reasons.append("duplicate")
@@ -278,16 +338,6 @@ class Controller:
                 dict(Counter(r for ec in evaluated for r in ec.evaluation.rejection_reasons)),
             )
         self.run.rounds = state.round
-        self.run.strategy_stats = self.selector.summary()
-        self.run.llm_calls = self.models.total_calls()
-        log.info(
-            "stopped: %s after %d rounds; %d accepted from %d candidates",
-            self.run.stop_reason,
-            state.round,
-            len(self.run.accepted),
-            self.run.n_candidates,
-        )
-        return self.run
 
     async def _maybe_multiple_choice(self, ec: EvaluatedCandidate) -> EvaluatedCandidate:
         if self.mc is None or ec.candidate.question_type != QuestionType.short_answer:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from pathlib import Path
 
@@ -42,29 +43,57 @@ def read_pdf(path: Path) -> str:
         from pypdf import PdfReader
     except ImportError as exc:  # pragma: no cover
         raise ImportError("pip install 'trivium[pdf]' to read PDF files") from exc
+    logging.getLogger("pypdf").setLevel(logging.ERROR)  # font-encoding warnings are noise here
     reader = PdfReader(str(path))
     pages = [(page.extract_text() or "") for page in reader.pages]
     return _strip_repeated_lines(pages)
 
 
+# download stamps and license lines that publishers print on every page
+_PUBLISHER_BOILERPLATE = re.compile(
+    r"downloaded from https?://|wiley online library|terms and conditions|creativecommons\.org|"
+    r"for rules of use|all rights reserved|©\s*\d{4}|this article is protected by copyright",
+    re.I,
+)
+
+
+def _line_signature(line: str) -> str:
+    """Running headers differ only in page numbers ("1806 Journal of …", "1808 Journal of …"):
+    compare them with digits collapsed."""
+    return re.sub(r"\d+", "#", " ".join(line.split()).lower())
+
+
 def _strip_repeated_lines(pages: list[str]) -> str:
-    """Remove running headers/footers: lines that repeat on most pages."""
+    """Remove running headers/footers: lines whose digit-normalised form repeats on most pages."""
     if len(pages) < 3:
         return "\n\n".join(pages)
     from collections import Counter
 
     counts: Counter[str] = Counter()
+    exact: Counter[str] = Counter()
     for page in pages:
         lines = {ln.strip() for ln in page.splitlines() if ln.strip()}
-        counts.update(lines)
-    threshold = max(3, int(0.6 * len(pages)))
-    noise = {ln for ln, c in counts.items() if c >= threshold and len(ln) < 120}
+        counts.update({_line_signature(ln) for ln in lines})
+        exact.update(lines)
+    # odd/even pages often carry different header variants, so each repeats on ~half the pages
+    threshold = max(3, math.ceil(0.35 * len(pages)))
+    noise = {sig for sig, c in counts.items() if c >= threshold and len(sig) < 300}
+    exact_noise = {ln for ln, c in exact.items() if c >= threshold and len(ln) < 300}
+
+    def is_noise(ln: str) -> bool:
+        stripped = ln.strip()
+        if stripped in exact_noise or _PUBLISHER_BOILERPLATE.search(ln):
+            return True
+        if stripped.endswith("."):  # sentences differing only in numbers are body text
+            return False
+        return _line_signature(ln) in noise
+
     cleaned = []
     for page in pages:
         keep = [
             ln
             for ln in page.splitlines()
-            if ln.strip() not in noise and not re.fullmatch(r"\s*\d+\s*", ln)
+            if not is_noise(ln) and not re.fullmatch(r"\s*\d+\s*", ln)
         ]
         cleaned.append("\n".join(keep))
     return "\n\n".join(cleaned)

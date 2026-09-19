@@ -67,6 +67,8 @@ class DatasetInfo(BaseModel):
     generated_candidates: int
     accepted_questions: int
     rounds: int
+    selected_top: int | None = None  # --best K: pool ranked, top-k kept
+    selected_by: str | None = None
     stop_reason: str
     mode: str
     models: dict[str, str] = Field(default_factory=dict)

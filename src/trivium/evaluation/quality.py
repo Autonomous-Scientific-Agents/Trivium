@@ -38,7 +38,13 @@ class QualityScores(BaseModel):
     specificity: float = Field(
         ge=0, le=1, description="1.0 = targets one specific fact; 0.0 = broad summary question"
     )
-    interestingness: float = Field(ge=0, le=1, description="1.0 = engaging trivia; 0.0 = dull")
+    interestingness: float = Field(
+        ge=0,
+        le=1,
+        description="Use the whole scale: 0.2 = routine methodological detail; 0.5 = a specific, "
+        "non-obvious fact; 0.8+ = surprising or quotable (a record, a first, a striking number, an "
+        "unexpected connection)",
+    )
     notes: str = ""
 
 
@@ -55,7 +61,10 @@ QUALITY_INSTRUCTIONS = """Score the question independently on each metric in [0,
   "True or False:" prefix of a true/false item and the listed options of a multiple-choice item
   are NOT leakage.
 - specificity: the question targets a specific fact rather than a broad summary.
-- interestingness: how engaging the question would be for a knowledgeable trivia audience.
+- interestingness: how engaging the question would be for a knowledgeable trivia audience. Use the
+  whole scale and discriminate: 0.2 for routine methodological details (which format, which stage),
+  0.5 for a specific non-obvious fact, 0.8 or more only for something surprising or quotable (a
+  record, a first, a striking magnitude, an unexpected connection). Most questions are not 0.7.
 Be strict: a question that says "according to the text" or asks "what did the authors find" should
 score low on clarity/specificity."""
 

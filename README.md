@@ -87,6 +87,33 @@ questions. For datasets you intend to publish, set `roles.quality_evaluator`, `r
 `roles.open_book` to a model from a different family than `question_generator`
 (e.g. generate with `gpt41`, evaluate with `claudesonnet45`).
 
+## Best-of selection: "the single hardest, most interesting question"
+
+Acceptance is a threshold test, so `-n 1` returns the *first* question that clears the bar, not
+the best one. `--best K` instead generates an accepted pool (default `8*K`, at least 10; or `-n`),
+ranks it and keeps only the top K, moving the rest to `rejected.jsonl` as `not_selected`:
+
+```bash
+uv run trivium generate --input paper.pdf --best 1 --mode trivia -o best.json
+```
+
+`--best` also steers the adaptive loop toward hard questions from the first round (multi-hop,
+derived and comparison strategies are up-weighted and the generator is told to avoid
+single-lookup questions). The ranking criterion (`--select-by`) defaults to `trivia` in
+`--mode trivia` and `challenge` otherwise:
+
+| criterion | score |
+|---|---|
+| `challenge` | 0.4 · difficulty label (extreme > hard > medium > easy) + 0.3 · failure rate of the small/medium tiers + 0.2 · closed-book failure + 0.1 · reasoning depth |
+| `interest` | 0.7 · rubric interestingness + 0.15 · specificity + 0.15 · clarity |
+| `trivia` | 0.55 · challenge + 0.45 · interest |
+| `quality` | the composite quality score |
+
+Every question carries `evaluation.selection_score` and `selection_rank`, so a different
+criterion can be applied offline to the saved pool. Configure `difficulty_small` /
+`difficulty_medium` roles for a real challenge signal; without tiers the closed-book result is
+the only proxy.
+
 ### Argo Gateway (Argonne)
 
 The `argo` provider talks to the native Argo endpoints (chat + embeddings), so it works against

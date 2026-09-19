@@ -45,6 +45,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="also write a JSONL bundle (metadata, questions, facts, documents, rejected)",
     )
     g.add_argument("--mode", choices=["rag", "trivia"], default=None)
+    g.add_argument(
+        "--best",
+        type=int,
+        metavar="K",
+        help="generate a pool (default 8*K, min 10; or -n), rank it and keep only the K best; "
+        "steers generation toward hard questions",
+    )
+    g.add_argument(
+        "--select-by",
+        choices=["challenge", "interest", "trivia", "quality"],
+        help="ranking used by --best (default: trivia in --mode trivia, else challenge)",
+    )
+    g.add_argument(
+        "--prefer-difficulty",
+        choices=["easy", "medium", "hard"],
+        help="steer the adaptive loop toward this difficulty from the first round",
+    )
     g.add_argument("--easy", type=int)
     g.add_argument("--medium", type=int)
     g.add_argument("--hard", type=int)
@@ -90,6 +107,12 @@ def _overrides(args: argparse.Namespace) -> dict[str, Any]:
     ):
         if getattr(args, key, None) is not None:
             gen[key] = getattr(args, key)
+    if getattr(args, "best", None) is not None:
+        gen["select_top"] = args.best
+    if getattr(args, "select_by", None):
+        gen["select_by"] = args.select_by
+    if getattr(args, "prefer_difficulty", None):
+        gen["prefer_difficulty"] = args.prefer_difficulty
     if getattr(args, "require_document_dependence", False):
         gen["require_document_dependence"] = True
     if getattr(args, "question_types", None):
@@ -149,6 +172,11 @@ def cmd_generate(args: argparse.Namespace) -> int:
             {
                 "output": cfg.output,
                 "accepted": len(dataset.questions),
+                **(
+                    {"selected_by": run.selected_by, "pool": run.target}
+                    if cfg.generation.select_top
+                    else {}
+                ),
                 "candidates": run.n_candidates,
                 "rounds": run.rounds,
                 "stop_reason": run.stop_reason,

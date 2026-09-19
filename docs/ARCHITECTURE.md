@@ -29,6 +29,7 @@
 | §31 caching | `models/cache.py` (SQLite, content-addressed, per trial) |
 | §32 parallelism | `asyncio.gather` throughout; per-model `Semaphore(max_concurrency)` |
 | §33 stopping criteria | `orchestration/stopping.py::should_stop` |
+| (extension) best-of selection `--best K` | `orchestration/selection.py` (`challenge_score`, `interest_score`, `rank`), `Controller._select_best`, `GenerationConfig.select_top/select_by/prefer_difficulty` |
 | §34 dataset-level metrics | `output/schema.py::dataset_metrics` |
 
 ## Evaluation order (cost-aware early exit)

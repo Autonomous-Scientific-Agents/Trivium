@@ -52,3 +52,37 @@ def test_long_paragraph_is_split():
     chunks = chunk_document(doc, ChunkingConfig(target_chars=400, max_chars=600, min_chars=50))
     assert len(chunks) > 3
     assert all(len(c.text) <= 600 + 50 for c in chunks)
+
+
+def test_running_headers_with_page_numbers_are_stripped():
+    from trivium.ingestion.loader import _strip_repeated_lines
+
+    pages = []
+    for i in range(6):
+        head = (
+            f"{1806 + i} Journal of Something 2018, 39, 1806–1814"
+            if i % 2 == 0
+            else f"Journal of Something 2018, 39, 1806–1814 {1806 + i}"
+        )
+        pages.append(
+            f"{head}\nBody paragraph {i} with real content.\nRun {i} used {i * 8} cores\n"
+            " 1096987x, Downloaded from https://onlinelibrary.example.org by Lab on [01/01/2024].\n"
+            f"{i + 1}"
+        )
+    text = _strip_repeated_lines(pages)
+    assert "Journal of Something" not in text and "Downloaded from" not in text
+    # sentences that differ only in numbers are body text and must survive
+    assert all(f"Body paragraph {i} with real content." in text for i in range(6))
+    # non-sentence lines that repeat modulo digits on most pages are treated as headers
+    assert "used" not in text
+    assert not any(ln.strip().isdigit() for ln in text.splitlines())
+
+
+def test_page_numbered_lines_and_sentences_are_not_headings():
+    assert detect_heading("1806 Journal of Computational Chemistry 2018, 39, 1806–1814") is None
+    assert detect_heading("2. The number of eigenvalues in each slice should be close") is None
+    assert detect_heading("2 Results and discussion") == (1, "Results and discussion")
+    assert detect_heading("4.1 Spectrum Slicing With Multiple Communicators") == (
+        2,
+        "Spectrum Slicing With Multiple Communicators",
+    )

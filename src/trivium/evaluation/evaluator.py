@@ -15,7 +15,7 @@ from trivium.evaluation.difficulty import calibrate
 from trivium.evaluation.quality import heuristic_leakage, score_quality
 from trivium.evaluation.redundancy import RedundancyIndex
 from trivium.evaluation.retrieval import RetrievalProbe
-from trivium.facts.store import FactStore
+from trivium.facts.store import FactStore, norm
 from trivium.generation.base import Candidate
 from trivium.ingestion.models import Chunk
 from trivium.models.llm import LLMError
@@ -23,6 +23,9 @@ from trivium.models.registry import ModelRegistry
 from trivium.prompts import PROMPT_VERSION
 
 log = logging.getLogger(__name__)
+
+
+_YES_NO = {"yes", "no", "true", "false"}
 
 
 class Evaluation(BaseModel):
@@ -56,6 +59,8 @@ class Evaluation(BaseModel):
     nearest_question_id: str | None = None
 
     overall_quality: float | None = None
+    selection_score: float | None = None  # set by best-of selection (--best K)
+    selection_rank: int | None = None
     accepted: bool = False
     rejection_reasons: list[str] = Field(default_factory=list)
     notes: str = ""
@@ -186,6 +191,8 @@ class Evaluator:
             and cand.answer_type != "choice"
         ):
             reasons.append("answer_too_long")
+        if cand.answer_type != "boolean" and norm(cand.answer) in _YES_NO:
+            reasons.append("yes_no_answer")  # trivially guessable; belongs to the true/false type
         # comparison questions legitimately name the compared entities, so only the LLM rubric
         # judges leakage for them; other strategies also get the cheap structural check
         if (
