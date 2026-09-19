@@ -75,11 +75,10 @@ def match_answer(
             if rnums and pnums:
                 r = rnums[0]
                 p = pnums[0]
-                if (
-                    r == p
-                    or (r != 0 and abs(p - r) / abs(r) <= rel_tol)
-                    or (r == 0 and abs(p) < 1e-9)
-                ):
+                # integers (years, counts, ranks) must match exactly; the relative tolerance is for
+                # measured quantities such as 0.1201 vs 0.12
+                tol_ok = (not float(r).is_integer()) and r != 0 and abs(p - r) / abs(r) <= rel_tol
+                if r == p or tol_ok or (r == 0 and abs(p) < 1e-9):
                     if answer_type == "numeric" or len(pnums) == 1:
                         return True
     return False

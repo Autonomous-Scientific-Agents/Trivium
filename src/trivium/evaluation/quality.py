@@ -15,14 +15,30 @@ log = logging.getLogger(__name__)
 
 
 class QualityScores(BaseModel):
-    answerability: float = Field(ge=0, le=1)
-    evidence_entailment: float = Field(ge=0, le=1)
-    ambiguity: float = Field(ge=0, le=1)
-    answer_conciseness: float = Field(ge=0, le=1)
-    clarity: float = Field(ge=0, le=1)
-    answer_leakage: float = Field(ge=0, le=1)
-    specificity: float = Field(ge=0, le=1)
-    interestingness: float = Field(ge=0, le=1)
+    answerability: float = Field(
+        ge=0, le=1, description="1.0 = fully answerable from the evidence alone"
+    )
+    evidence_entailment: float = Field(
+        ge=0, le=1, description="1.0 = evidence implies the reference answer is correct and unique"
+    )
+    ambiguity: float = Field(
+        ge=0,
+        le=1,
+        description="LOWER IS BETTER. 0.0 = exactly one defensible answer; 1.0 = many answers could be argued correct",
+    )
+    answer_conciseness: float = Field(
+        ge=0, le=1, description="1.0 = short, deterministic answer suitable for exact-match grading"
+    )
+    clarity: float = Field(ge=0, le=1, description="1.0 = unambiguous, self-contained question")
+    answer_leakage: float = Field(
+        ge=0,
+        le=1,
+        description="LOWER IS BETTER. 0.0 = question reveals nothing about the answer; 1.0 = answer is stated in the question",
+    )
+    specificity: float = Field(
+        ge=0, le=1, description="1.0 = targets one specific fact; 0.0 = broad summary question"
+    )
+    interestingness: float = Field(ge=0, le=1, description="1.0 = engaging trivia; 0.0 = dull")
     notes: str = ""
 
 
@@ -30,10 +46,12 @@ QUALITY_SYSTEM = "You are a rigorous reviewer of quiz / benchmark questions."
 QUALITY_INSTRUCTIONS = """Score the question independently on each metric in [0, 1]:
 - answerability: the question can be answered from the evidence alone.
 - evidence_entailment: the evidence implies the reference answer is correct and unique.
-- ambiguity: several different answers could reasonably be considered correct (LOWER is better).
+- ambiguity: several different answers could reasonably be considered correct.
+  POLARITY: 0.0 = exactly one defensible answer (good), 1.0 = many (bad).
 - answer_conciseness: the reference answer is short and deterministic enough for exact-match grading.
 - clarity: the question is unambiguous and self-contained without unnecessary complexity.
-- answer_leakage: the wording of the question gives away the answer (LOWER is better). The
+- answer_leakage: the wording of the question gives away the answer. POLARITY: 0.0 = no hint (good),
+  1.0 = the answer appears in the question (bad). The
   "True or False:" prefix of a true/false item and the listed options of a multiple-choice item
   are NOT leakage.
 - specificity: the question targets a specific fact rather than a broad summary.

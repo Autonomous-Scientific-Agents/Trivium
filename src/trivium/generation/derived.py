@@ -8,6 +8,7 @@ import math
 from trivium.facts.models import Fact, fmt_number
 from trivium.generation.base import Candidate, Generator
 from trivium.generation.comparison import comparable_groups
+from trivium.generation.true_false import is_year_like
 
 INSTRUCTIONS = """Two facts report the same quantity under different subjects or conditions. Ask a question whose
 answer is the {op} between them, exactly as given in `required_answer`. Name both subjects/conditions
@@ -64,7 +65,13 @@ class DerivedGenerator(Generator):
     async def _one(self, a: Fact, b: Fact) -> Candidate | None:
         va, vb = a.object.value, b.object.value
         assert va is not None and vb is not None
-        op = self.ctx.rng.choice(["difference", "ratio"]) if vb != 0 and va != 0 else "difference"
+        # ratios of years (or other integer labels) are meaningless; only differences make sense
+        ratio_ok = (
+            vb != 0
+            and va != 0
+            and not (is_year_like(va, a.object.unit) or is_year_like(vb, b.object.unit))
+        )
+        op = self.ctx.rng.choice(["difference", "ratio"]) if ratio_ok else "difference"
         if op == "difference":
             hi, lo = (a, b) if va >= vb else (b, a)
             value = hi.object.value - lo.object.value  # type: ignore[operator]

@@ -159,7 +159,13 @@ class Evaluator:
             and cand.answer_type != "choice"
         ):
             reasons.append("answer_too_long")
-        if cand.answer_type not in ("boolean", "choice") and heuristic_leakage(cand) >= 1.0:
+        # comparison questions legitimately name the compared entities, so only the LLM rubric
+        # judges leakage for them; other strategies also get the cheap structural check
+        if (
+            cand.answer_type not in ("boolean", "choice")
+            and cand.strategy != "comparison"
+            and heuristic_leakage(cand) >= 1.0
+        ):
             reasons.append("answer_leaked_in_question")
         sim, overlap, nearest = await self.redundancy.assess(cand, judge=self._judge)
         ev.max_similarity_to_existing_question = round(sim, 4)

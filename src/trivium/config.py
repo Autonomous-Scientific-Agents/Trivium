@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from enum import Enum
 from pathlib import Path
@@ -32,7 +33,7 @@ class Difficulty(str, Enum):
 
 # ----------------------------------------------------------------------------- models
 class ModelSpec(BaseModel):
-    provider: str = "openai"  # openai | anthropic | mock
+    provider: str = "openai"  # openai | anthropic | argo | mock
     model: str = "gpt-4o-mini"
     base_url: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
@@ -40,9 +41,13 @@ class ModelSpec(BaseModel):
     max_tokens: int = 2048
     max_concurrency: int = 8
     mock_skill: float = 1.0  # only for provider=mock: ability of the simulated answerer
+    # provider-specific settings passed through to the client, e.g. for argo:
+    #   {user: <anl username>, env: prod|dev|test}  (user defaults to $ARGO_USER)
+    options: dict[str, Any] = Field(default_factory=dict)
 
     def key(self) -> str:
-        return f"{self.provider}|{self.model}|{self.base_url}|{self.temperature}|{self.mock_skill}"
+        opts = json.dumps(self.options, sort_keys=True)
+        return f"{self.provider}|{self.model}|{self.base_url}|{self.temperature}|{self.mock_skill}|{opts}"
 
     def merged(self, override: dict[str, Any] | ModelSpec | None) -> ModelSpec:
         if override is None:
@@ -56,9 +61,10 @@ class ModelSpec(BaseModel):
 
 
 class EmbeddingSpec(BaseModel):
-    provider: str = "hashing"  # hashing | openai | sentence-transformers
+    provider: str = "hashing"  # hashing | openai | argo | sentence-transformers
     model: str | None = None
     base_url: str | None = None
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ModelsConfig(BaseModel):

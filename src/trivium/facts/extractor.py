@@ -44,6 +44,7 @@ Rules:
 - `subject` must be a fully resolved named entity or concept (never a pronoun such as "it" or "they").
 - `predicate` is a short snake_case relation (e.g. "mean_absolute_error", "trained_on", "founded_in").
 - `object` is the value as text. For numeric quantities also fill `value` (number) and `unit`.
+  Leave `unit` null for years, dates, counts and other unitless numbers (never use "year" as a unit).
 - Put conditions that scope the claim into `qualifiers` (e.g. dataset, year, temperature).
 - `fact_type` is one of: {types}.
 - `evidence` is a verbatim quote (≤ 300 chars) from the chunk that supports the fact.

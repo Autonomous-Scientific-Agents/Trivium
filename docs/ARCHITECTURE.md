@@ -49,3 +49,18 @@
 * Without small/medium tiers, difficulty is a documented proxy (`difficulty_method: "proxy"`).
 * A deterministic `mock` provider re-implements every task with regular expressions, so the whole
   loop is testable offline (`tests/`).
+
+## Refinements from the first live runs (Argo, gpt41 family, 2026-09-19)
+
+* Lower-is-better rubric fields (`ambiguity`, `answer_leakage`) carry their polarity in the JSON
+  schema `description`; without it the validator scored every clear fact `ambiguity = 1.0`.
+* Heading-only paragraphs are dropped before chunking (a "# Title" chunk produced a `section_title` fact).
+* Pseudo-units (`year`, `count`, …) are kept on the fact but hidden by `FactObject.display()`
+  ("2021 year" leaked into answers, statements and distractors).
+* The structural answer-in-question check is skipped for `comparison` items, which necessarily name
+  the compared entities; the LLM rubric still scores leakage for them.
+* Integer references (years, counts) require exact numeric matches; the 1 % relative tolerance applies
+  only to non-integer measured quantities (2023 was being accepted for 2021).
+* True/false numeric perturbations shift years by a few years and scale other quantities by 0.6–1.6 at
+  the original precision ("founded in 3886", "0.4375 eV" were the previous behaviour).
+* Derived ratios are disabled for year-like operands (differences remain).

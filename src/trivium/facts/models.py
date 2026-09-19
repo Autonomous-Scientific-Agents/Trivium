@@ -29,6 +29,10 @@ def fmt_number(value: float) -> str:
     return f"{value:.6g}"
 
 
+# pseudo-units that read badly after a number ("2021 year"); kept on the fact, hidden in display
+_NO_DISPLAY_UNITS = {"year", "years", "yr", "date", "count", "number", "none", "n/a"}
+
+
 class FactObject(BaseModel):
     text: str
     value: float | None = None
@@ -41,7 +45,8 @@ class FactObject(BaseModel):
     def display(self) -> str:
         if self.value is not None:
             v = fmt_number(self.value)
-            return f"{v} {self.unit}".strip() if self.unit else v
+            unit = self.unit if self.unit and self.unit.lower() not in _NO_DISPLAY_UNITS else None
+            return f"{v} {unit}" if unit else v
         return self.text
 
 

@@ -17,10 +17,20 @@ log = logging.getLogger(__name__)
 
 class FactJudgement(BaseModel):
     index: int
-    entailment: float = Field(ge=0, le=1)
-    atomicity: float = Field(ge=0, le=1)
-    explicitness: float = Field(ge=0, le=1)
-    ambiguity: float = Field(ge=0, le=1)
+    entailment: float = Field(
+        ge=0, le=1, description="1.0 = evidence fully supports the fact; 0.0 = unsupported"
+    )
+    atomicity: float = Field(
+        ge=0, le=1, description="1.0 = a single claim; 0.0 = several unrelated claims"
+    )
+    explicitness: float = Field(
+        ge=0, le=1, description="1.0 = stated verbatim; 0.0 = requires inference"
+    )
+    ambiguity: float = Field(
+        ge=0,
+        le=1,
+        description="LOWER IS BETTER. 0.0 = subject and object are perfectly clear; 1.0 = hopelessly vague or unresolved",
+    )
     notes: str = ""
 
 
@@ -33,7 +43,8 @@ VALIDATE_INSTRUCTIONS = """For each fact, score in [0, 1]:
 - entailment: the evidence text (and chunk context) clearly supports the fact exactly as stated.
 - atomicity: the fact expresses a single claim.
 - explicitness: the fact is stated directly rather than inferred.
-- ambiguity: subject or object is vague, unresolved, or could refer to several things (lower is better).
+- ambiguity: subject or object is vague, unresolved, or could refer to several things.
+  NOTE THE POLARITY: ambiguity 0.0 = perfectly clear, 1.0 = hopelessly ambiguous. A clear fact gets ~0.05.
 Return one judgement per fact, using the same `index` values."""
 
 

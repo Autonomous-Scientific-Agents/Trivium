@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import math
+import re
 
 from pydantic import BaseModel
 
 from trivium.config import QuestionType
 from trivium.evaluation.entailment import check_statement
-from trivium.facts.models import Fact, fmt_number
+from trivium.facts.models import Fact, FactObject, fmt_number
 from trivium.facts.store import norm
 from trivium.generation.base import Candidate, GeneratedQuestion, Generator
 from trivium.models.llm import LLMError
@@ -26,14 +26,38 @@ given (`object` may have been deliberately altered — assert it as given withou
 qualifiers as conditions. Do not add information that is not in the fact."""
 
 
-def perturb_number(value: float, rng) -> float:
+def _decimals(text: str) -> int:
+    m = re.search(r"\d+\.(\d+)", text or "")
+    return len(m.group(1)) if m else 0
+
+
+def is_year_like(value: float, unit: str | None) -> bool:
+    return float(value).is_integer() and 1000 <= value <= 2999 and not unit
+
+
+def perturb_number(value: float, rng, *, text: str = "", unit: str | None = None) -> float:
+    """Return a wrong-but-plausible alternative to ``value``.
+
+    Years are shifted by a few years; other quantities are scaled by 0.6–1.6 and rounded to the
+    precision of the original so the false statement does not look obviously fabricated.
+    """
+    if is_year_like(value, unit):
+        delta = rng.choice([-12, -7, -5, -3, -2, 2, 3, 5, 7, 12])
+        return float(int(value) + delta)
     if value == 0:
         return rng.choice([1.0, -1.0, 0.5])
-    factor = rng.choice([0.5, 0.7, 0.8, 1.25, 1.5, 2.0])
+    factor = rng.choice([0.6, 0.75, 0.85, 1.15, 1.3, 1.6])
     new = value * factor
-    digits = max(0, 3 - int(math.floor(math.log10(abs(new))))) if new else 0
-    new = round(new, digits)
-    return new if new != value else value * 3
+    decimals = _decimals(text)
+    if decimals:
+        new = round(new, decimals)
+    elif float(value).is_integer():
+        # keep integer-ness and roughly the same number of significant digits
+        mag = 10 ** max(0, len(str(int(abs(value)))) - 2)
+        new = float(round(new / mag) * mag)
+    else:
+        new = float(f"{new:.3g}")
+    return new if new != value else value * 1.5
 
 
 class TrueFalseGenerator(Generator):
@@ -49,10 +73,8 @@ class TrueFalseGenerator(Generator):
         """Return (object_text, source) for a false variant, or None if none available."""
         rng = self.ctx.rng
         if fact.object.is_numeric:
-            v = perturb_number(fact.object.value, rng)  # type: ignore[arg-type]
-            txt = (
-                f"{fmt_number(v)} {fact.object.unit}".strip() if fact.object.unit else fmt_number(v)
-            )
+            v = perturb_number(fact.object.value, rng, text=fact.object.text, unit=fact.object.unit)  # type: ignore[arg-type]
+            txt = FactObject(text=fmt_number(v), value=v, unit=fact.object.unit).display()
             return txt, "numeric_perturbation"
         siblings = [
             f

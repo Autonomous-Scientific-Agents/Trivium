@@ -78,8 +78,29 @@ models:
 ```
 
 Providers: `openai` (any OpenAI-compatible server: OpenAI, vLLM, Ollama, ALCF inference
-endpoints via `base_url`), `anthropic`, and `mock` (deterministic, offline).
-Environment overrides: `TRIVIUM_PROVIDER`, `TRIVIUM_MODEL`, `TRIVIUM_BASE_URL`.
+endpoints via `base_url`), `anthropic`, `argo` (Argonne's Argo Gateway, see below), and `mock`
+(deterministic, offline). Environment overrides: `TRIVIUM_PROVIDER`, `TRIVIUM_MODEL`, `TRIVIUM_BASE_URL`.
+
+### Argo Gateway (Argonne)
+
+The `argo` provider talks to the native Argo endpoints (chat + embeddings), so it works against
+production and with every model Argo hosts (`gpt4o`, `gpt41`, `gpt41mini`, `gpt41nano`, `gpt5*`,
+`gpto3`, `gpto4mini`, `claudeopus46`, `claudesonnet45`, `claudehaiku45`, `gemini25pro`,
+`gemini25flash`, …; embeddings `v3small`, `v3large`, `ada002`). Reasoning models automatically get
+`max_completion_tokens` instead of sampling parameters. You must be on the Argonne network/VPN
+and pass your ANL domain username:
+
+```bash
+export ARGO_USER=<your ANL domain username>
+uv run trivium generate --input tests/data --config examples/config.argo.yaml -n 15 \
+    --jsonl-dir runs/argo -o runs/argo/questions.json -v
+```
+
+`examples/config.argo.yaml` uses `gpt41` by default with `gpt41nano`/`gpt41mini` as the small and
+medium difficulty tiers and `v3small` embeddings. Per-role `options: {env: dev}` switches a role to
+the dev gateway (e.g. for models only available there). Argo's OpenAI-compatible shim
+(`https://apps-dev.inside.anl.gov/argoapi/v1`, `api_key` = ANL username) also works via the
+`openai` provider with `api_key_env: ARGO_USER`, but it is dev-only and has no embeddings.
 
 ## What gets evaluated
 

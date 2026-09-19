@@ -146,6 +146,10 @@ def build_embedder(
         return HashingEmbedder()
     if provider in ("openai", "openai-compatible"):
         return OpenAIEmbedder(model or "text-embedding-3-small", cache=cache, **kw)
+    if provider == "argo":
+        from trivium.models.argo import ArgoEmbedder
+
+        return ArgoEmbedder(model or "v3small", cache=cache, **kw)
     if provider in ("sentence-transformers", "st"):
         return SentenceTransformerEmbedder(model or "all-MiniLM-L6-v2")
     raise ValueError(f"unknown embedding provider: {provider!r}")

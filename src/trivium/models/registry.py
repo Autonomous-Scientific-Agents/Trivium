@@ -33,11 +33,11 @@ class ModelRegistry:
                 continue
             self._llms[role] = self._get_or_build(spec)
         emb = config.models.embeddings
+        emb_kwargs: dict = dict(emb.options)
+        if emb.provider in ("openai", "argo") and emb.base_url:
+            emb_kwargs["base_url"] = emb.base_url
         self.embedder: Embedder = build_embedder(
-            emb.provider,
-            emb.model,
-            cache=self.cache,
-            **({"base_url": emb.base_url} if emb.provider == "openai" else {}),
+            emb.provider, emb.model, cache=self.cache, **emb_kwargs
         )
 
     def _get_or_build(self, spec: ModelSpec) -> LLM:
@@ -53,6 +53,7 @@ class ModelRegistry:
                 max_concurrency=spec.max_concurrency,
                 max_tokens=spec.max_tokens,
                 **({"skill": spec.mock_skill} if spec.provider == "mock" else {}),
+                **spec.options,
             )
         return self._by_spec[key]
 

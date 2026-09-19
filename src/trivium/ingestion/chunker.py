@@ -11,6 +11,14 @@ _PARA_SPLIT = re.compile(r"\n\s*\n")
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(])")
 
 
+def _is_heading_only(paragraph: str, section_title: str) -> bool:
+    """A paragraph that is just the section heading carries no facts."""
+    if "\n" in paragraph:
+        return False
+    stripped = paragraph.lstrip("#").strip()
+    return paragraph.startswith("#") or stripped.lower() == section_title.lower()
+
+
 def _split_long(text: str, max_chars: int) -> list[str]:
     if len(text) <= max_chars:
         return [text]
@@ -41,7 +49,7 @@ def chunk_document(doc: Document, cfg: ChunkingConfig | None = None) -> list[Chu
                 idx = pos
             pos = idx + len(para)
             p = para.strip()
-            if not p:
+            if not p or _is_heading_only(p, sec.title):
                 continue
             for piece in _split_long(p, cfg.max_chars):
                 pidx = sec_text.find(piece, idx)

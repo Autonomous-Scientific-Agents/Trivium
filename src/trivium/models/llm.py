@@ -307,6 +307,10 @@ def build_llm(
         return OpenAILLM(model, cache=cache, **kwargs)
     if provider == "anthropic":
         return AnthropicLLM(model, cache=cache, **kwargs)
+    if provider == "argo":
+        from trivium.models.argo import ArgoLLM
+
+        return ArgoLLM(model, cache=cache, **kwargs)
     if provider == "mock":
         kwargs.pop("base_url", None)
         kwargs.pop("api_key_env", None)

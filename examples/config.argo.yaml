@@ -1,0 +1,42 @@
+# Argo Gateway configuration (Argonne internal network / VPN required).
+#   export ARGO_USER=<your ANL domain username>
+#   uv run trivium generate --input <docs> --config examples/config.argo.yaml -n 50 -o questions.json
+#
+# Roles not listed fall back to `default`. Set `options: {env: dev}` on a role to use the dev
+# gateway (some newest models are dev-only). `user` may also be given explicitly in `options`.
+mode: rag
+
+models:
+  default:
+    provider: argo
+    model: gpt41                # strong, cheap-ish generalist for extraction/generation/evaluation
+    temperature: 0.0
+    max_tokens: 2048
+    max_concurrency: 6          # be considerate: Argo is a shared gateway
+  roles:
+    quality_evaluator: {model: gpt41}
+    closed_book:       {model: gpt41}
+    open_book:         {model: gpt41}
+    judge:             {model: gpt41mini}
+    difficulty_small:  {model: gpt41nano}
+    difficulty_medium: {model: gpt41mini}
+    difficulty_large:  {model: gpt41}
+    # alternatives: claudesonnet45, claudeopus46, gemini25pro, gpto4mini (reasoning), gpt5 ...
+  embeddings:
+    provider: argo
+    model: v3small              # v3small | v3large | ada002
+
+evaluation:
+  closed_book_trials: 3
+  open_book_trials: 1
+  difficulty_trials: 2
+  use_llm_judge: true
+
+generation:
+  batch_size: 8
+  max_answer_words: 8
+  question_types: [short_answer, true_false, multiple_choice]
+
+cache:
+  enabled: true
+  dir: .trivium_cache
