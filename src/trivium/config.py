@@ -1,0 +1,259 @@
+"""Configuration for the generation pipeline (YAML file + CLI overrides)."""
+
+from __future__ import annotations
+
+import os
+from enum import Enum
+from pathlib import Path
+from typing import Any, ClassVar
+
+import yaml
+from pydantic import BaseModel, Field, model_validator
+
+
+class Mode(str, Enum):
+    rag = "rag"
+    trivia = "trivia"
+
+
+class QuestionType(str, Enum):
+    short_answer = "short_answer"
+    true_false = "true_false"
+    multiple_choice = "multiple_choice"
+
+
+class Difficulty(str, Enum):
+    easy = "easy"
+    medium = "medium"
+    hard = "hard"
+    extreme = "extreme"  # even the largest evaluator fails with gold evidence
+    unknown = "unknown"
+
+
+# ----------------------------------------------------------------------------- models
+class ModelSpec(BaseModel):
+    provider: str = "openai"  # openai | anthropic | mock
+    model: str = "gpt-4o-mini"
+    base_url: str | None = None
+    api_key_env: str = "OPENAI_API_KEY"
+    temperature: float = 0.0
+    max_tokens: int = 2048
+    max_concurrency: int = 8
+    mock_skill: float = 1.0  # only for provider=mock: ability of the simulated answerer
+
+    def key(self) -> str:
+        return f"{self.provider}|{self.model}|{self.base_url}|{self.temperature}|{self.mock_skill}"
+
+    def merged(self, override: dict[str, Any] | ModelSpec | None) -> ModelSpec:
+        if override is None:
+            return self
+        data = (
+            override.model_dump(exclude_unset=True)
+            if isinstance(override, ModelSpec)
+            else dict(override)
+        )
+        return self.model_copy(update=data)
+
+
+class EmbeddingSpec(BaseModel):
+    provider: str = "hashing"  # hashing | openai | sentence-transformers
+    model: str | None = None
+    base_url: str | None = None
+
+
+class ModelsConfig(BaseModel):
+    """Per-role model assignment (design §29).
+
+    ``default`` is used for every role that has no entry in ``roles``. Entries in
+    ``roles`` may be partial (e.g. only ``model``) and are merged onto ``default``.
+    ``difficulty_small`` / ``difficulty_medium`` are optional; without them difficulty is
+    estimated from closed-book accuracy and reasoning depth.
+    """
+
+    default: ModelSpec = Field(default_factory=ModelSpec)
+    roles: dict[str, dict[str, Any] | None] = Field(default_factory=dict)
+    embeddings: EmbeddingSpec = Field(default_factory=EmbeddingSpec)
+
+    OPTIONAL_ROLES: ClassVar[frozenset[str]] = frozenset({"difficulty_small", "difficulty_medium"})
+
+    def spec_for(self, role: str) -> ModelSpec | None:
+        if role in self.roles:
+            override = self.roles[role]
+            if override is None:
+                return None
+            return self.default.merged(override)
+        if role in self.OPTIONAL_ROLES:
+            return None
+        return self.default
+
+
+# ------------------------------------------------------------------------- pipeline
+class ChunkingConfig(BaseModel):
+    target_chars: int = 1500
+    max_chars: int = 2500
+    min_chars: int = 200
+
+
+class ExtractionConfig(BaseModel):
+    validate_facts: bool = True
+    min_confidence: float = 0.6
+    min_quality: float = 0.7
+    max_facts_per_chunk: int = 15
+    max_chunks: int | None = None  # debugging aid: only extract from the first N chunks
+
+
+class Thresholds(BaseModel):
+    """Hard acceptance constraints (design §25)."""
+
+    evidence_entailment: float = 0.9
+    answerability: float = 0.9
+    ambiguity: float = 0.2
+    answer_leakage: float = 0.5
+    open_book_accuracy: float = 0.8
+    duplicate_similarity: float = 0.90
+    overall_quality: float = 0.75
+    # closed-book accuracy above this rejects the question in strict RAG mode
+    closed_book_max_for_rag: float = 0.6
+    min_document_dependence: float = 0.3
+    # difficulty calibration (design §16)
+    tier_pass_accuracy: float = 0.8
+
+
+class EvaluationConfig(BaseModel):
+    thresholds: Thresholds = Field(default_factory=Thresholds)
+    closed_book_trials: int = 3
+    open_book_trials: int = 1
+    difficulty_trials: int = 2
+    use_llm_judge: bool = True
+    retrieval_difficulty: bool = True
+    retrieval_ranks: list[int] = Field(default_factory=lambda: [1, 3, 5, 10])
+    # composite quality weights per mode (design §24)
+    weights: dict[str, dict[str, float]] = Field(
+        default_factory=lambda: {
+            "rag": {
+                "evidence_entailment": 0.25,
+                "answerability": 0.20,
+                "clarity": 0.15,
+                "document_dependence": 0.15,
+                "novelty": 0.10,
+                "specificity": 0.10,
+                "interestingness": 0.05,
+            },
+            "trivia": {
+                "evidence_entailment": 0.20,
+                "answerability": 0.20,
+                "clarity": 0.20,
+                "document_dependence": 0.05,
+                "novelty": 0.10,
+                "specificity": 0.10,
+                "interestingness": 0.15,
+            },
+        }
+    )
+
+
+class GenerationConfig(BaseModel):
+    num_questions: int | None = None
+    max_questions: int = 500  # cap for the automatic target (design §4)
+    easy: int | None = None
+    medium: int | None = None
+    hard: int | None = None
+    question_types: list[QuestionType] = Field(default_factory=lambda: [QuestionType.short_answer])
+    type_ratio: dict[str, float] | None = None  # e.g. {"short_answer": .6, "true_false": .2, ...}
+    max_answer_words: int = 8
+    require_document_dependence: bool = False
+    multi_hop_ratio: float = 0.15
+    cross_document_ratio: float = 0.05
+    seed: int = 0
+    batch_size: int = 8
+    max_rounds: int = 60
+    patience: int = 4  # rounds without an acceptance before stopping (exhaustion)
+    min_novelty: float = 0.15  # stop when candidate novelty stays below this
+    max_candidates: int | None = None  # optional cost budget
+    strategy_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "atomic": 0.25,
+            "relationship": 0.25,
+            "comparison": 0.20,
+            "derived": 0.10,
+            "multi_hop": 0.15,
+            "cross_document": 0.05,
+        }
+    )
+
+    @model_validator(mode="after")
+    def _quota_consistency(self) -> GenerationConfig:
+        quotas = [q for q in (self.easy, self.medium, self.hard) if q is not None]
+        if quotas and self.num_questions is None:
+            self.num_questions = sum(quotas)
+        return self
+
+    def difficulty_quota(self) -> dict[str, int] | None:
+        if all(q is None for q in (self.easy, self.medium, self.hard)):
+            return None
+        return {"easy": self.easy or 0, "medium": self.medium or 0, "hard": self.hard or 0}
+
+
+class CacheConfig(BaseModel):
+    enabled: bool = True
+    dir: str = ".trivium_cache"
+
+
+class Config(BaseModel):
+    inputs: list[str] = Field(default_factory=list)
+    topic: str | None = None
+    topic_max_sources: int = 5
+    output: str = "questions.json"
+    jsonl_dir: str | None = None
+    mode: Mode = Mode.rag
+    log_level: str = "INFO"
+    chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
+    extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    generation: GenerationConfig = Field(default_factory=GenerationConfig)
+    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    models: ModelsConfig = Field(default_factory=ModelsConfig)
+    cache: CacheConfig = Field(default_factory=CacheConfig)
+
+    # ------------------------------------------------------------------ loading
+    @classmethod
+    def load(cls, path: str | Path | None = None, **overrides: Any) -> Config:
+        data: dict[str, Any] = {}
+        if path is not None:
+            with open(path, encoding="utf-8") as fh:
+                data = yaml.safe_load(fh) or {}
+        data = _deep_update(data, overrides)
+        cfg = cls.model_validate(data)
+        cfg._apply_env()
+        return cfg
+
+    def _apply_env(self) -> None:
+        """Environment overrides for the default model (convenient for CI / ALCF)."""
+        if os.environ.get("TRIVIUM_PROVIDER"):
+            self.models.default.provider = os.environ["TRIVIUM_PROVIDER"]
+        if os.environ.get("TRIVIUM_MODEL"):
+            self.models.default.model = os.environ["TRIVIUM_MODEL"]
+        if os.environ.get("TRIVIUM_BASE_URL"):
+            self.models.default.base_url = os.environ["TRIVIUM_BASE_URL"]
+
+    @property
+    def cache_path(self) -> Path:
+        return Path(self.cache.dir) / "responses.sqlite"
+
+    @property
+    def quality_weights(self) -> dict[str, float]:
+        return self.evaluation.weights[self.mode.value]
+
+    def to_yaml(self) -> str:
+        return yaml.safe_dump(self.model_dump(mode="json"), sort_keys=False)
+
+
+def _deep_update(base: dict[str, Any], upd: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for k, v in upd.items():
+        if v is None:
+            continue
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_update(out[k], v)
+        else:
+            out[k] = v
+    return out

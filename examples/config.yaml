@@ -1,0 +1,65 @@
+# Example configuration for `trivium generate --config examples/config.yaml ...`
+mode: rag                      # rag | trivia — changes composite-score weights
+
+chunking:
+  target_chars: 1500
+  max_chars: 2500
+
+extraction:
+  validate_facts: true
+  min_confidence: 0.6
+  min_quality: 0.7
+  max_facts_per_chunk: 15
+
+generation:
+  num_questions: 100
+  question_types: [short_answer, true_false, multiple_choice]
+  type_ratio: {short_answer: 0.5, true_false: 0.2, multiple_choice: 0.3}
+  max_answer_words: 8
+  require_document_dependence: false
+  multi_hop_ratio: 0.2
+  cross_document_ratio: 0.1
+  batch_size: 8
+  patience: 4
+  strategy_weights:
+    atomic: 0.25
+    relationship: 0.25
+    comparison: 0.20
+    derived: 0.10
+    multi_hop: 0.15
+    cross_document: 0.05
+
+evaluation:
+  closed_book_trials: 3
+  open_book_trials: 1
+  difficulty_trials: 2
+  use_llm_judge: true
+  retrieval_difficulty: true
+  thresholds:
+    evidence_entailment: 0.9
+    answerability: 0.9
+    ambiguity: 0.2
+    open_book_accuracy: 0.8
+    duplicate_similarity: 0.9
+    overall_quality: 0.75
+    tier_pass_accuracy: 0.8
+
+models:
+  default:
+    provider: openai           # openai | anthropic | mock
+    model: gpt-4o
+    # base_url: http://localhost:11434/v1   # Ollama / vLLM / ALCF inference endpoints
+    # api_key_env: OPENAI_API_KEY
+    temperature: 0.0
+    max_concurrency: 8
+  roles:
+    difficulty_small: {model: gpt-4o-mini}
+    difficulty_medium: {model: gpt-4o}
+    judge: {model: gpt-4o-mini}
+  embeddings:
+    provider: openai           # hashing (no deps) | openai | sentence-transformers
+    model: text-embedding-3-small
+
+cache:
+  enabled: true
+  dir: .trivium_cache

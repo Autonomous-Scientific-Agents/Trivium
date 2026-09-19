@@ -1,0 +1,69 @@
+[project]
+name = "trivium"
+version = "0.1.0"
+description = "Adaptive, grounded trivia and RAG-benchmark question generation from documents or topics."
+readme = "README.md"
+authors = [{ name = "Murat Keçeli" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+keywords = ["question generation", "RAG evaluation", "trivia", "knowledge graph", "LLM"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "pydantic>=2.5",
+    "networkx>=3.0",
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.30"]
+anthropic = ["anthropic>=0.30"]
+pdf = ["pypdf>=4.0"]
+embeddings = ["sentence-transformers>=2.2"]
+all = ["openai>=1.30", "anthropic>=0.30", "pypdf>=4.0"]
+
+[project.scripts]
+trivium = "trivium.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "pypdf>=4.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trivium"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B"]
+# E501: long literal strings (prompts) are wrapped by the formatter where possible.
+# UP042: (str, Enum) kept for JSON/pydantic interoperability.
+ignore = ["E501", "UP042"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]

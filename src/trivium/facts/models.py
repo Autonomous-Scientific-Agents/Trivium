@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+import re
+from enum import Enum
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class FactType(str, Enum):
+    attribute = "attribute"
+    definition = "definition"
+    quantity = "quantity"
+    event = "event"
+    relationship = "relationship"
+    comparison = "comparison"
+    classification = "classification"
+    temporal = "temporal"
+    location = "location"
+    causal = "causal"
+    procedure = "procedure"
+    result = "result"
+    derived = "derived"  # computed from other facts (design §10.4)
+
+
+def fmt_number(value: float) -> str:
+    """Human-friendly number: integers without exponent, otherwise up to 6 significant digits."""
+    if abs(value) < 1e15 and float(value).is_integer():
+        return str(int(value))
+    return f"{value:.6g}"
+
+
+class FactObject(BaseModel):
+    text: str
+    value: float | None = None
+    unit: str | None = None
+
+    @property
+    def is_numeric(self) -> bool:
+        return self.value is not None
+
+    def display(self) -> str:
+        if self.value is not None:
+            v = fmt_number(self.value)
+            return f"{v} {self.unit}".strip() if self.unit else v
+        return self.text
+
+
+class FactQuality(BaseModel):
+    entailment: float = 0.0
+    atomicity: float = 0.0
+    explicitness: float = 0.0
+    ambiguity: float = 1.0  # lower is better
+    overall: float = 0.0
+    notes: str = ""
+
+
+class Fact(BaseModel):
+    id: str
+    subject: str
+    predicate: str
+    object: FactObject
+    qualifiers: dict[str, str] = Field(default_factory=dict)
+    fact_type: FactType = FactType.attribute
+    explicit: bool = True
+    document_id: str
+    section_id: str = ""
+    chunk_id: str
+    evidence: str
+    confidence: float = 1.0
+    quality: FactQuality | None = None
+    derived_from: list[str] = Field(default_factory=list)
+    derivation: str | None = None  # e.g. "difference(fact_1, fact_2)"
+
+    @field_validator("subject", "predicate")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        return v.strip()
+
+    def statement(self) -> str:
+        """Render the fact as a natural-language sentence."""
+        pred = self.predicate.replace("_", " ")
+        s = f"{self.subject} — {pred}: {self.object.display()}"
+        if self.qualifiers:
+            q = ", ".join(f"{k}={v}" for k, v in self.qualifiers.items())
+            s += f" ({q})"
+        return s
+
+    @property
+    def quality_score(self) -> float:
+        return self.quality.overall if self.quality else self.confidence
+
+
+_PRONOUNS = re.compile(
+    r"^(it|they|this|that|these|those|he|she|we|the (?:model|method|authors?|paper|study))$", re.I
+)
+
+
+def looks_unresolved(subject: str) -> bool:
+    return bool(_PRONOUNS.match(subject.strip()))
