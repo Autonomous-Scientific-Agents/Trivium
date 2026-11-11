@@ -33,7 +33,7 @@ class Difficulty(str, Enum):
 
 # ----------------------------------------------------------------------------- models
 class ModelSpec(BaseModel):
-    provider: str = "openai"  # openai | anthropic | argo | mock
+    provider: str = "openai"  # openai | anthropic | argo | asksage | alcf | mock
     model: str = "gpt-4o-mini"
     base_url: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
@@ -77,7 +77,7 @@ class ModelSpec(BaseModel):
 
 
 class EmbeddingSpec(BaseModel):
-    provider: str = "hashing"  # hashing | openai | argo | sentence-transformers
+    provider: str = "hashing"  # hashing | openai | argo | asksage | alcf | sentence-transformers
     model: str | None = None
     base_url: str | None = None
     options: dict[str, Any] = Field(default_factory=dict)
@@ -139,6 +139,8 @@ class Thresholds(BaseModel):
     min_document_dependence: float = 0.3
     # difficulty calibration (design §16)
     tier_pass_accuracy: float = 0.8
+    # rubric: the question must make sense to a reader who has not seen the source
+    standalone: float = 0.6
 
 
 class EvaluationConfig(BaseModel):
@@ -183,6 +185,7 @@ class GenerationConfig(BaseModel):
     question_types: list[QuestionType] = Field(default_factory=lambda: [QuestionType.short_answer])
     type_ratio: dict[str, float] | None = None  # e.g. {"short_answer": .6, "true_false": .2, ...}
     max_answer_words: int = 8
+    max_statement_words: int = 30  # true/false statements longer than this are discarded
     require_document_dependence: bool = False
     multi_hop_ratio: float = 0.15
     cross_document_ratio: float = 0.05
@@ -198,6 +201,12 @@ class GenerationConfig(BaseModel):
     pool_factor: int = 8  # pool size = max(10, pool_factor * select_top) when num_questions unset
     # steer the adaptive loop toward a difficulty from round one (implied "hard" by select_top)
     prefer_difficulty: str | None = None
+    # personas (CLI --persona): who asks. Steers fact scoring, question writing and the ranking
+    # tournament toward what this audience needs, and enables the gap-driven `persona` strategy
+    # (questions asked from the table of contents only, then grounded in the text).
+    personas: list[str] = Field(default_factory=list)
+    persona_weight: float = 0.5  # base weight of the `persona` strategy when personas are set
+    persona_ideas_per_call: int = 8  # questions proposed per ideation call
     strategy_weights: dict[str, float] = Field(
         default_factory=lambda: {
             "atomic": 0.25,
@@ -250,6 +259,32 @@ class GenerationConfig(BaseModel):
         return {"easy": self.easy or 0, "medium": self.medium or 0, "hard": self.hard or 0}
 
 
+class TriviaConfig(BaseModel):
+    """Settings that only apply in ``mode: trivia``.
+
+    Trivia questions should be about what makes a document notable, have crisp answers, make
+    sense without the source, and (for multiple choice) not be guessable from the options alone.
+    """
+
+    # score every fact for trivia value and steer sampling toward high scorers
+    # (None = on in trivia mode, off otherwise)
+    score_facts: bool | None = None
+    brief_chars: int = 9000  # document text shown to the brief writer (head + tail)
+    score_batch: int = 40  # facts per scoring call
+    # defaults applied in trivia mode unless generation/extraction set them explicitly
+    max_answer_words: int = 4
+    max_facts_per_chunk: int = 8
+    max_statement_words: int = 25
+    # give the question writer the surrounding passage and the document brief
+    passage_context: bool = True
+    passage_chars: int = 1500
+    # reject a multiple-choice form whose chance-corrected closed-book accuracy exceeds this
+    # (the short-answer form is kept instead)
+    mc_max_closed_book: float = 0.67
+    # Swiss-style pairwise "which is the better trivia question" rounds used by --best ranking
+    pairwise_rounds: int = 3
+
+
 class CacheConfig(BaseModel):
     enabled: bool = True
     dir: str = ".trivium_cache"
@@ -267,8 +302,31 @@ class Config(BaseModel):
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    trivia: TriviaConfig = Field(default_factory=TriviaConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
+
+    @model_validator(mode="after")
+    def _trivia_defaults(self) -> Config:
+        """Trivia mode tightens answer length, statement length and extraction granularity
+        unless the user set those values explicitly."""
+        if self.mode == Mode.trivia:
+            g, t = self.generation, self.trivia
+            if "max_answer_words" not in g.model_fields_set:
+                g.max_answer_words = t.max_answer_words
+            if "max_statement_words" not in g.model_fields_set:
+                g.max_statement_words = t.max_statement_words
+            if "max_facts_per_chunk" not in self.extraction.model_fields_set:
+                self.extraction.max_facts_per_chunk = t.max_facts_per_chunk
+        return self
+
+    @property
+    def is_trivia(self) -> bool:
+        return self.mode == Mode.trivia
+
+    @property
+    def score_trivia_facts(self) -> bool:
+        return self.trivia.score_facts if self.trivia.score_facts is not None else self.is_trivia
 
     # ------------------------------------------------------------------ loading
     @classmethod

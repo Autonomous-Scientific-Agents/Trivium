@@ -13,6 +13,11 @@ class Out(BaseModel):
 def test_extract_json_handles_fences_and_prose():
     assert extract_json('Sure! ```json\n{"a": 1}\n```') == '{"a": 1}'
     assert extract_json('prefix {"a": {"b": 2}} suffix') == '{"a": {"b": 2}}'
+    # a bare JSON answer that quotes a code block must not be cut at the inner fence
+    raw = '{"facts": [{"evidence": "```bash\\nqsub -I -q debug\\n```"}]}'
+    assert extract_json(raw) == raw
+    fenced = '```json\n{"e": "run ```ls``` first"}\n```'
+    assert extract_json(fenced) == '{"e": "run ```ls``` first"}'
 
 
 def test_prompt_roundtrip():

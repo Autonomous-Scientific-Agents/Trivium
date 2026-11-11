@@ -5,6 +5,7 @@ from trivium.generation.cross_document import CrossDocumentGenerator
 from trivium.generation.derived import DerivedGenerator
 from trivium.generation.multihop import MultiHopGenerator
 from trivium.generation.multiple_choice import MultipleChoiceConverter
+from trivium.generation.persona import PersonaGenerator
 from trivium.generation.relationship import RelationshipGenerator
 from trivium.generation.true_false import TrueFalseGenerator
 
@@ -18,6 +19,7 @@ GENERATORS: dict[str, type[Generator]] = {
         MultiHopGenerator,
         CrossDocumentGenerator,
         TrueFalseGenerator,
+        PersonaGenerator,
     )
 }
 

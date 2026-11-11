@@ -38,6 +38,13 @@ class QualityScores(BaseModel):
     specificity: float = Field(
         ge=0, le=1, description="1.0 = targets one specific fact; 0.0 = broad summary question"
     )
+    standalone: float = Field(
+        1.0,
+        ge=0,
+        le=1,
+        description="1.0 = makes sense to a knowledgeable reader who has never seen the source; "
+        "0.0 = depends on labels or context local to the source (Run 2, Table 3, the larger matrix)",
+    )
     interestingness: float = Field(
         ge=0,
         le=1,
@@ -61,6 +68,9 @@ QUALITY_INSTRUCTIONS = """Score the question independently on each metric in [0,
   "True or False:" prefix of a true/false item and the listed options of a multiple-choice item
   are NOT leakage.
 - specificity: the question targets a specific fact rather than a broad summary.
+- standalone: the question makes sense to a knowledgeable reader who has never seen the source.
+  Score low when it relies on labels that only exist inside the source ("Run 2", "sample B",
+  "Table 3", "the proposed method", "the larger matrix") or on unstated context.
 - interestingness: how engaging the question would be for a knowledgeable trivia audience. Use the
   whole scale and discriminate: 0.2 for routine methodological details (which format, which stage),
   0.5 for a specific non-obvious fact, 0.8 or more only for something surprising or quotable (a

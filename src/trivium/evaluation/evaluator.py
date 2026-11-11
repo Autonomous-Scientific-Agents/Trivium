@@ -12,6 +12,14 @@ from pydantic import BaseModel, Field
 from trivium.config import Config, Difficulty
 from trivium.evaluation.answering import accuracy
 from trivium.evaluation.difficulty import calibrate
+from trivium.evaluation.form import (
+    answer_grounded,
+    clause_answer,
+    generic_answer,
+    lexical_overlap,
+    local_label,
+    source_reference,
+)
 from trivium.evaluation.quality import heuristic_leakage, score_quality
 from trivium.evaluation.redundancy import RedundancyIndex
 from trivium.evaluation.retrieval import RetrievalProbe
@@ -34,6 +42,7 @@ class Evaluation(BaseModel):
     evidence_entailment: float | None = None
     clarity: float | None = None
     specificity: float | None = None
+    standalone: float | None = None
     ambiguity: float | None = None
     answer_conciseness: float | None = None
     answer_leakage: float | None = None
@@ -44,6 +53,8 @@ class Evaluation(BaseModel):
     open_book_accuracy: float | None = None
     document_dependence: float | None = None
     closed_book_answers: list[str] = Field(default_factory=list)
+    # multiple choice: how often each option was picked closed-book (distractor effectiveness)
+    option_pick_counts: dict[str, int] = Field(default_factory=dict)
     open_book_answers: list[str] = Field(default_factory=list)
 
     tier_accuracy: dict[str, float] = Field(default_factory=dict)
@@ -60,6 +71,9 @@ class Evaluation(BaseModel):
 
     overall_quality: float | None = None
     selection_score: float | None = None  # set by best-of selection (--best K)
+    pairwise_win_rate: float | None = None  # set by the --best interestingness tournament
+    # share of the question's content words found in its evidence (rephrasing / leakage)
+    lexical_overlap: float | None = None
     selection_rank: int | None = None
     accepted: bool = False
     rejection_reasons: list[str] = Field(default_factory=list)
@@ -79,6 +93,27 @@ class EvaluatedCandidate(BaseModel):
     evaluation: Evaluation
     evidence: list[EvidenceSpan]
     provenance: dict[str, Any] = Field(default_factory=dict)
+
+
+def option_picks(options: list[str], answers: list[str]) -> dict[str, int]:
+    """Count closed-book picks per option text from letter (or verbatim option) answers."""
+    letters = "ABCDEFGH"
+    counts = {o: 0 for o in options}
+    for a in answers:
+        a = (a or "").strip()
+        letter = a[:1].upper() if a else ""
+        if (
+            len(a) <= 3
+            and letter in letters[: len(options)]
+            and (len(a) == 1 or not a[1].isalnum())
+        ):
+            counts[options[letters.index(letter)]] += 1
+            continue
+        for o in options:
+            if norm(o) == norm(a):
+                counts[o] += 1
+                break
+    return counts
 
 
 class Evaluator:
@@ -193,6 +228,7 @@ class Evaluator:
             reasons.append("answer_too_long")
         if cand.answer_type != "boolean" and norm(cand.answer) in _YES_NO:
             reasons.append("yes_no_answer")  # trivially guessable; belongs to the true/false type
+        reasons.extend(self.form_problems(cand))
         # comparison questions legitimately name the compared entities, so only the LLM rubric
         # judges leakage for them; other strategies also get the cheap structural check
         if (
@@ -227,6 +263,7 @@ class Evaluator:
             q.answer_leakage,
         )
         ev.specificity, ev.interestingness, ev.notes = q.specificity, q.interestingness, q.notes
+        ev.standalone = q.standalone
         if q.evidence_entailment < self.t.evidence_entailment:
             reasons.append("unsupported_answer")
         if q.answerability < self.t.answerability:
@@ -235,6 +272,8 @@ class Evaluator:
             reasons.append("ambiguous")
         if q.answer_leakage > self.t.answer_leakage:
             reasons.append("answer_leakage")
+        if self.cfg.is_trivia and q.standalone < self.t.standalone:
+            reasons.append("not_standalone")
         if reasons:
             return self._finish(cand, ev)
 
@@ -273,6 +312,12 @@ class Evaluator:
             else ev.closed_book_accuracy
         )
         ev.closed_book_chance_corrected = round(closed_adj, 4)
+        if cand.answer_type == "choice" and cand.options:
+            ev.option_pick_counts = option_picks(cand.options, ev.closed_book_answers)
+            if self.cfg.is_trivia and closed_adj > self.cfg.trivia.mc_max_closed_book:
+                # the options give the answer away (or the item is common knowledge); the
+                # controller keeps the short-answer form instead
+                reasons.append("mc_too_easy")
         ev.document_dependence = round(ev.open_book_accuracy - closed_adj, 4)
         if ev.open_book_accuracy < self.t.open_book_accuracy:
             reasons.append("large_model_failed_open_book")
@@ -323,8 +368,41 @@ class Evaluator:
             reasons.append("low_quality_score")
         return self._finish(cand, ev)
 
+    def form_problems(self, cand: Candidate) -> list[str]:
+        """Deterministic form checks (see :mod:`trivium.evaluation.form`)."""
+        out: list[str] = []
+        text = cand.question
+        if source_reference(text):
+            out.append("source_reference")
+        if self.cfg.is_trivia and local_label(text):
+            out.append("local_label")
+        if cand.answer_type in ("short_answer", "numeric"):
+            if generic_answer(cand.answer):
+                out.append("generic_answer")
+            elif self.cfg.is_trivia and clause_answer(cand.answer):
+                out.append("clause_answer")
+            if self.cfg.is_trivia and cand.answer_kind == "other":
+                out.append("answer_kind_other")
+            # in trivia mode the writer also sees the surrounding passage and may take the answer
+            # from there; the cited facts must still contain it (computed answers excepted)
+            if (
+                self.cfg.is_trivia
+                and cand.strategy != "derived"
+                and not answer_grounded(cand.answer, self._fact_texts(cand))
+            ):
+                out.append("answer_not_in_evidence")
+        return out
+
+    def _fact_texts(self, cand: Candidate) -> list[str]:
+        out: list[str] = []
+        for f in self.store.many(cand.source_fact_ids):
+            out += [f.evidence, f.subject, f.object.display()]
+        return out
+
     def _finish(self, cand: Candidate, ev: Evaluation) -> EvaluatedCandidate:
         ev.accepted = not ev.rejection_reasons
+        if ev.lexical_overlap is None:
+            ev.lexical_overlap = lexical_overlap(cand.question, self._fact_texts(cand))
         if ev.overall_quality is None and ev.evidence_entailment is not None:
             ev.overall_quality = self.composite(ev)
         prov = {

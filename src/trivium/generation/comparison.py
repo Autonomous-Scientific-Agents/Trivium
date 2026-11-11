@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 
-from trivium.facts.models import Fact
+from trivium.facts.models import Fact, is_setting
 from trivium.facts.store import norm
 from trivium.generation.base import Candidate, Generator
 
@@ -15,10 +15,13 @@ mention the numeric values themselves. The `answer` is the subject name given in
 
 
 def comparable_groups(facts: list[Fact], *, cross_document: bool | None = None) -> list[list[Fact]]:
-    """Group numeric facts by (predicate, unit, qualifiers) with ≥2 distinct subjects and values."""
+    """Group numeric facts by (predicate, unit, qualifiers) with ≥2 distinct subjects and values.
+
+    Configuration values (``NTHREADS=1``, ``--ppn 12``) are left out: which environment variable
+    has the larger value is not a meaningful comparison."""
     groups: dict[tuple, list[Fact]] = defaultdict(list)
     for f in facts:
-        if not f.object.is_numeric:
+        if not f.object.is_numeric or is_setting(f):
             continue
         key = (f.predicate, (f.object.unit or "").lower(), tuple(sorted(f.qualifiers.items())))
         groups[key].append(f)

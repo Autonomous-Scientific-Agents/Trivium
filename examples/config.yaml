@@ -1,5 +1,6 @@
 # Example configuration for `trivium generate --config examples/config.yaml ...`
-mode: rag                      # rag | trivia — changes composite-score weights
+mode: rag                      # rag | trivia — trivia also enables fact scoring, stricter
+                               # answer/standalone checks and harder MC/TF (see `trivia:`)
 
 chunking:
   target_chars: 1500
@@ -9,13 +10,14 @@ extraction:
   validate_facts: true
   min_confidence: 0.6
   min_quality: 0.7
-  max_facts_per_chunk: 15
+  max_facts_per_chunk: 15       # trivia mode default: 8 (an explicit value here wins)
 
 generation:
   num_questions: 100
   question_types: [short_answer, true_false, multiple_choice]
   type_ratio: {short_answer: 0.5, true_false: 0.2, multiple_choice: 0.3}
-  max_answer_words: 8
+  max_answer_words: 8           # trivia mode default: 4 (an explicit value here wins)
+  max_statement_words: 30       # true/false statements; trivia mode default: 25
   require_document_dependence: false
   multi_hop_ratio: 0.2
   cross_document_ratio: 0.1
@@ -43,6 +45,13 @@ evaluation:
     duplicate_similarity: 0.9
     overall_quality: 0.75
     tier_pass_accuracy: 0.8
+    standalone: 0.6             # trivia: rubric "makes sense without the source"
+
+trivia:                         # only used in mode: trivia
+  score_facts: null             # null = on in trivia mode; document briefs + per-fact trivia scores
+  passage_context: true         # show the writer the passage and the document brief
+  mc_max_closed_book: 0.67      # chance-corrected closed-book accuracy above this → keep short answer
+  pairwise_rounds: 3            # --best ranking: Swiss pairwise tournament rounds (0 = rubric only)
 
 models:
   default:
@@ -56,6 +65,7 @@ models:
     difficulty_small: {model: gpt-4o-mini}
     difficulty_medium: {model: gpt-4o}
     judge: {model: gpt-4o-mini}
+    # trivia_scorer: {model: gpt-4o}   # document briefs and fact trivia scores (trivia mode)
   embeddings:
     provider: openai           # hashing (no deps) | openai | sentence-transformers
     model: text-embedding-3-small

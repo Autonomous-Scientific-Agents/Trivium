@@ -10,6 +10,7 @@ from trivium.models.llm import LLM, build_llm
 ROLES = (
     "fact_extractor",
     "fact_validator",
+    "trivia_scorer",
     "question_generator",
     "quality_evaluator",
     "judge",
@@ -34,7 +35,7 @@ class ModelRegistry:
             self._llms[role] = self._get_or_build(spec)
         emb = config.models.embeddings
         emb_kwargs: dict = dict(emb.options)
-        if emb.provider in ("openai", "argo") and emb.base_url:
+        if emb.provider in ("openai", "argo", "asksage", "alcf") and emb.base_url:
             emb_kwargs["base_url"] = emb.base_url
         self.embedder: Embedder = build_embedder(
             emb.provider, emb.model, cache=self.cache, **emb_kwargs

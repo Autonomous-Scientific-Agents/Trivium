@@ -197,7 +197,20 @@ def answer_from_evidence(question: str, evidence_text: str) -> str | None:
     return None
 
 
+_CMP = re.compile(
+    _SUBJ
+    + r" has an? (?P<rel>higher|lower) (?P<q>[a-z][a-z ]+?) than (?P<b>[A-Z][\w\-]*(?: [A-Z0-9][\w\-]*)*)\.?$"
+)
+
+
 def statement_label(statement: str, facts: list[dict]) -> str:
+    m = _CMP.match(statement.strip())
+    if m:
+        fa, fb = _find(facts, m.group("s"), m.group("q")), _find(facts, m.group("b"), m.group("q"))
+        if not (fa and fb) or fa["value"] is None or fb["value"] is None:
+            return "neutral"
+        higher = fa["value"] > fb["value"]
+        return "entailed" if higher == (m.group("rel") == "higher") else "contradicted"
     parsed = extract(statement)
     if not parsed:
         return "neutral"
@@ -307,16 +320,67 @@ def respond(
                 "answer": str(ans),
                 "accepted_answers": [],
                 "answer_type": "numeric" if numeric else "short_answer",
+                "answer_kind": "number" if numeric else "name",
                 "rationale": "mock",
             }
         )
 
     if task == "write_statement":
+        if payload.get("claim") == "comparison":
+            return j(
+                {
+                    "statement": f"{payload['subject']} has a {payload['relation']} "
+                    f"{_words(payload['quantity'])} than {payload['other_subject']}."
+                }
+            )
         return j(
             {
                 "statement": f"{payload['subject']} {_verbalize(payload['predicate'], payload['object'])}."
             }
         )
+
+    if task == "falsify_statement":
+        obj = str(payload.get("object", ""))
+        value, unit = _parse_obj(obj)
+        if value is not None:
+            wrong = f"{fmt_number(value * 2 if value else 1)} {unit or ''}".strip()
+        else:
+            wrong = f"Alt-{obj}"
+        return j(
+            {
+                "statement": f"{payload['subject']} {_verbalize(payload['predicate'], wrong)}.",
+                "edit": f"{obj} -> {wrong}",
+            }
+        )
+
+    if task == "document_brief":
+        text = payload.get("excerpt", "")
+        sents = [s.strip() for s in _SENT.split(text.replace("\n", " ")) if extract(s.strip())]
+        return j({"summary": " ".join(sents[:2]), "nuggets": sents[:6]})
+
+    if task == "score_trivia":
+        out = []
+        for f in payload.get("facts", []):
+            st = f.get("statement", "")
+            routine = re.search(r"\b(Run \d+|temperature|cutoff|runtime)\b", st)
+            out.append(
+                {
+                    "fact_id": f["fact_id"],
+                    "trivia_score": 0.1 if routine else round(0.3 + 0.6 * _seeded("trivia", st), 3),
+                }
+            )
+        return j({"scores": out})
+
+    if task == "options_only":
+        opts = payload.get("options", [])
+        i = int(_seeded("options_only", model, "|".join(opts), trial) * max(1, len(opts)))
+        return j({"answer": "ABCDEFGH"[min(i, max(0, len(opts) - 1))]})
+
+    if task == "pairwise":
+        a, b = payload.get("A", {}), payload.get("B", {})
+        sa = _seeded("pairwise", a.get("question", ""))
+        sb = _seeded("pairwise", b.get("question", ""))
+        return j({"better": "A" if sa >= sb else "B", "reason": "mock"})
 
     if task == "check_statement":
         facts = extract("\n".join(payload.get("evidence", [])))
@@ -338,6 +402,7 @@ def respond(
         leak = 0.9 if (leaked and not boolean) else 0.05
         concise = 1.0 if len(a.split()) <= 8 else 0.3
         generic = 1.0 if re.search(r"\b(authors?|text|paper|document)\b", q, re.I) else 0.0
+        local = bool(re.search(r"\b(Run|Sample|Case) \d+\b|compared entries", q))
         return j(
             {
                 "answerability": 0.95,
@@ -348,6 +413,7 @@ def respond(
                 "answer_leakage": leak,
                 "specificity": 0.9 - 0.5 * generic,
                 "interestingness": 0.4 + 0.5 * _seeded("interest", q),
+                "standalone": 0.3 if local else 0.95,
                 "notes": "mock",
             }
         )
@@ -383,17 +449,60 @@ def respond(
 
     if task == "distractors":
         correct = str(payload.get("correct_answer", ""))
-        pool = [v for v in payload.get("nearby_values", []) if v.lower() != correct.lower()]
+        pools = payload.get("pools", {})
+        out = [
+            {"text": v, "kind": kind}
+            for kind in ("in_document", "misconception", "near_miss")
+            for v in pools.get(kind, [])
+            if v.lower() != correct.lower()
+        ]
         m = _NUM.match(correct)
         if m:
             v = float(m.group(1).replace(",", ""))
             unit = m.group(2) or ""
-            pool += [f"{x:g} {unit}".strip() for x in (v * 0.5, v * 2, v * 1.5, v * 0.8)]
+            extra = [f"{x:g} {unit}".strip() for x in (v * 0.5, v * 2, v * 1.5, v * 0.8)]
         else:
-            pool += [f"{correct} II", f"Alt-{correct}", f"Neo{correct}", f"{correct} Prime"]
-        return j({"distractors": pool[:6]})
+            # distinct names (variants of the answer itself would be filtered as equivalent)
+            extra = ["Orion", "Vega", "Lyra", "Draco", "Cygnus"]
+        out += [{"text": x, "kind": "other"} for x in extra]
+        return j({"distractors": out[:8]})
 
     if task == "check_distractor":
-        return j({"also_correct": False, "plausible": True})
+        return j({"also_correct": False, "plausible": True, "same_type": True})
+
+    if task == "persona_questions":
+        # questions about the outline's sections; grounding (below) decides what is answerable
+        sections = [
+            (d.get("title", ""), sec) for d in payload.get("outline", []) for sec in d["sections"]
+        ]
+        asked = set(payload.get("already_asked", []))
+        out = []
+        gap = "Who do I contact when my allocation runs out?"  # never answerable: a gap report
+        if gap not in asked:
+            out.append({"question": gap})
+        for title, sec in sections:
+            q = f"As a newcomer, what should I know about {sec} in {title}?"
+            if q not in asked:
+                out.append({"question": q})
+        return j({"questions": out[:8]})
+
+    if task == "ground_question":
+        q = str(payload.get("question", ""))
+        for p in payload.get("passages", [])[:1]:
+            m = re.search(r"about (.+) in ", q)
+            facts = extract(p.get("text", ""))
+            if m and facts:
+                f = facts[int(_seeded("ground", q) * len(facts))]
+                return j(
+                    {
+                        "status": "answerable",
+                        "question": f"What is the {_words(f['predicate'])} of {f['subject']}?",
+                        "answer": f["object"],
+                        "answer_kind": "number" if f.get("value") is not None else "name",
+                        "passage_id": p["passage_id"],
+                        "quote": f["evidence"],
+                    }
+                )
+        return j({"status": "unanswerable", "note": "mock: not in the passages"})
 
     return j({})

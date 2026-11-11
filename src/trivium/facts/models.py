@@ -73,6 +73,7 @@ class Fact(BaseModel):
     evidence: str
     confidence: float = 1.0
     quality: FactQuality | None = None
+    trivia_score: float | None = None  # how good a trivia nugget this fact is (trivia mode)
     derived_from: list[str] = Field(default_factory=list)
     derivation: str | None = None  # e.g. "difference(fact_1, fact_2)"
 
@@ -98,6 +99,23 @@ class Fact(BaseModel):
 _PRONOUNS = re.compile(
     r"^(it|they|this|that|these|those|he|she|we|the (?:model|method|authors?|paper|study))$", re.I
 )
+
+
+# configuration values: an environment variable, a command-line flag, or "X is set to 12".
+# Comparing or doing arithmetic on them ("NRANKS_PER_NODE divided by NTHREADS") makes filler.
+_SETTING_SUBJECT = re.compile(r"^\$?\{?[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\}?$|^--?[A-Za-z]")
+_SETTING_PREDICATE = re.compile(
+    r"^(?:is_)?(?:set|sets|set_to|set_as|defaults?|defaults?_to|default_value|value|has_value|"
+    r"equals?|assigned(?:_to)?|configured(?:_as|_to)?|exported(?:_as|_to)?)(?:_to)?$"
+)
+
+
+def is_setting(fact: Fact) -> bool:
+    """A configuration value rather than a quantity worth comparing or computing with."""
+    return bool(
+        _SETTING_SUBJECT.match(fact.subject.strip())
+        or _SETTING_PREDICATE.match(fact.predicate.strip().lower())
+    )
 
 
 def looks_unresolved(subject: str) -> bool:

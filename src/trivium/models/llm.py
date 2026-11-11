@@ -78,21 +78,62 @@ class LLMError(RuntimeError):
     pass
 
 
+class ProviderAccessError(RuntimeError):
+    """The provider refused service (access revoked, usage limit exceeded).
+
+    Deliberately *not* an :class:`LLMError`: every call site tolerates LLMErrors and moves on, but
+    retrying or continuing against a blocked account only burns more requests. This propagates
+    out of the pipeline and stops the run."""
+
+
+# gateways that answer with a notice instead of an HTTP error (Argo: "ACCESS REVOKED ... Your
+# Argo usage limit has been exceeded")
+# Ask Sage: HTTP 429 "Token quota exceeded for the user / plan", "API key has been revoked or
+# expired"; OpenAI: 429 "You exceeded your current quota")
+_ACCESS_DENIED = re.compile(
+    r"ACCESS REVOKED|usage limit (?:has been )?exceeded|quota (?:has been )?exceeded"
+    r"|exceeded your current quota|revoked or expired",
+    re.I,
+)
+
+
+def access_denied(text: str) -> str | None:
+    """The provider's refusal notice, if ``text`` is one."""
+    if _ACCESS_DENIED.search(text or ""):
+        return re.sub(r"[*⚠️🚫]+", "", text).strip()[:500]
+    return None
+
+
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
-def extract_json(text: str) -> str:
-    """Pull the first JSON object/array out of a model response."""
-    m = _JSON_FENCE.search(text)
-    if m:
-        text = m.group(1)
-    text = text.strip()
+def _span(text: str) -> str | None:
     for opener, closer in (("{", "}"), ("[", "]")):
-        start = text.find(opener)
-        end = text.rfind(closer)
-        if start != -1 and end != -1 and end > start:
+        start, end = text.find(opener), text.rfind(closer)
+        if start != -1 and end > start:
             return text[start : end + 1]
-    return text
+    return None
+
+
+def extract_json(text: str) -> str:
+    """Pull the JSON object/array out of a model response.
+
+    Prefers a candidate that actually parses: the whole response, a fenced block, or the outermost
+    brace span. A bare JSON response can contain fences of its own (e.g. a quoted ```bash block),
+    so fences are not trusted blindly."""
+    stripped = text.strip()
+    fences = [m.group(1).strip() for m in _JSON_FENCE.finditer(text)]
+    candidates = [stripped, *fences, _span(stripped), *(_span(f) for f in fences)]
+    for c in candidates:
+        if not c:
+            continue
+        try:
+            json.loads(c)
+        except ValueError:
+            continue
+        return c
+    # nothing parses: best guess for the caller's error message / repair prompt
+    return next((c for c in (_span(fences[0]) if fences else None, _span(stripped)) if c), stripped)
 
 
 def _schema_instruction(response_model: type[BaseModel]) -> str:
@@ -192,12 +233,20 @@ class LLM:
                 self.calls += 1
             except Exception as exc:  # noqa: BLE001 — provider errors are heterogeneous
                 last_err = exc
+                notice = access_denied(str(exc))
+                if notice:
+                    raise ProviderAccessError(
+                        f"{self.provider}:{self.model} refused service: {notice}"
+                    ) from exc
                 if not is_retryable(exc):
                     raise LLMError(
                         f"{self.provider}:{self.model} failed permanently: {exc}"
                     ) from exc
                 await asyncio.sleep(min(2**attempt, 8))
                 continue
+            notice = access_denied(text)
+            if notice:
+                raise ProviderAccessError(f"{self.provider}:{self.model} refused service: {notice}")
             try:
                 resp = self._finish(text, response_model, cached=False)
             except LLMError as exc:
@@ -247,7 +296,7 @@ class LLM:
 
 
 # --------------------------------------------------------------------------- OpenAI
-_OPENAI_REASONING = re.compile(r"^(o\d|gpt-5)", re.I)
+_OPENAI_REASONING = re.compile(r"^(o\d|gpt-o\d|gpt-[5-9])", re.I)
 
 
 class OpenAILLM(LLM):
@@ -274,9 +323,10 @@ class OpenAILLM(LLM):
             api_key=key, base_url=base_url or os.environ.get("OPENAI_BASE_URL")
         )
         self._json_mode_ok = True
+        self._extra: dict[str, Any] = {}  # extra request fields, e.g. reasoning_effort
 
     async def _complete(self, messages, *, temperature, json_mode, task, trial, max_tokens):
-        kwargs: dict[str, Any] = dict(model=self.model, messages=messages)
+        kwargs: dict[str, Any] = dict(model=self.model, messages=messages, **self._extra)
         if _OPENAI_REASONING.match(self.model):
             # o-series / gpt-5 reject sampling parameters and use max_completion_tokens
             kwargs["max_completion_tokens"] = max_tokens
@@ -296,6 +346,147 @@ class OpenAILLM(LLM):
             else:
                 raise
         return resp.choices[0].message.content or ""
+
+
+# ------------------------------------------------------------------------- Ask Sage
+ASKSAGE_BASE_URL = "https://api.asksage.anl.gov/server/openai/v1"  # ANL's instance
+ASKSAGE_KEY_ENVS = ("ASK_SAGE_API", "ASK_SAGE_API_KEY", "ASKSAGE_API_KEY")
+
+
+def asksage_endpoint(
+    base_url: str | None = None, api_key_env: str | None = None
+) -> tuple[str, str]:
+    """Base URL and API key for Ask Sage's OpenAI-compatible API.
+
+    The key comes from ``api_key_env`` or one of :data:`ASKSAGE_KEY_ENVS`, never from
+    ``OPENAI_API_KEY`` (the generic default of ``api_key_env``), so an OpenAI key is not sent to
+    Ask Sage. Other Ask Sage instances: set ``base_url`` or ``$ASK_SAGE_BASE_URL``, e.g.
+    ``https://api.asksage.ai/server/openai/v1``.
+    """
+    envs = [api_key_env] if api_key_env and api_key_env != "OPENAI_API_KEY" else []
+    envs += list(ASKSAGE_KEY_ENVS)
+    key = next((os.environ[e] for e in envs if os.environ.get(e)), None)
+    if not key:
+        raise ValueError(f"Ask Sage needs an API key in ${envs[0]}")
+    return base_url or os.environ.get("ASK_SAGE_BASE_URL") or ASKSAGE_BASE_URL, key
+
+
+class AskSageLLM(OpenAILLM):
+    """Ask Sage through its OpenAI-compatible endpoint (``Authorization: Bearer <api key>``)."""
+
+    provider = "asksage"
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        api_key_env: str | None = None,
+        **kwargs: Any,
+    ):
+        url, key = asksage_endpoint(base_url, api_key_env)
+        super().__init__(model, base_url=url, api_key=api_key or key, **kwargs)
+
+
+# ------------------------------------------------------------- ALCF inference endpoints
+ALCF_API = "https://inference-api.alcf.anl.gov/resource_server"
+ALCF_CLUSTERS = {"sophia": "vllm", "metis": "api", "minerva": "api", "tara": "api"}
+_alcf_token: str | None = None
+
+
+def alcf_base_url(cluster: str = "sophia") -> str:
+    """OpenAI-compatible base URL of an ALCF inference cluster."""
+    cluster = cluster.lower()
+    if cluster not in ALCF_CLUSTERS:
+        raise ValueError(f"unknown ALCF cluster {cluster!r}; one of {sorted(ALCF_CLUSTERS)}")
+    return f"{ALCF_API}/{cluster}/{ALCF_CLUSTERS[cluster]}/v1"
+
+
+def alcf_token(api_key_env: str | None = None, *, refresh: bool = False) -> str:
+    """A Globus access token for the ALCF inference service.
+
+    Taken from ``api_key_env`` / ``$ALCF_ACCESS_TOKEN`` if set (a fixed token, never refreshed),
+    otherwise from ``alcf-tokens get-token inference``, which refreshes expired tokens (they last
+    48 hours) from the login cached by ``alcf-tokens login inference``.
+    """
+    global _alcf_token
+    envs = [api_key_env] if api_key_env and api_key_env != "OPENAI_API_KEY" else []
+    for env in [*envs, "ALCF_ACCESS_TOKEN"]:
+        if os.environ.get(env):
+            return os.environ[env]
+    if _alcf_token and not refresh:
+        return _alcf_token
+    token = None
+    try:
+        from alcf_tokens.auth import get_access_token  # type: ignore[import-not-found]
+
+        token = get_access_token("inference")
+    except ImportError:
+        import shutil
+        import subprocess
+
+        exe = shutil.which("alcf-tokens")
+        if exe:
+            out = subprocess.run(
+                [exe, "get-token", "inference"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            lines = out.stdout.strip().splitlines()
+            token = lines[-1].strip() if out.returncode == 0 and lines else None
+    if not token:
+        raise ValueError(
+            "no ALCF inference token: install alcf-tokens (uv tool install alcf-tokens), run "
+            "`alcf-tokens login inference`, or set $ALCF_ACCESS_TOKEN"
+        )
+    _alcf_token = token
+    return token
+
+
+class ALCFLLM(OpenAILLM):
+    """Open-weight models on the ALCF inference endpoints (Sophia, Metis, Minerva, Tara).
+
+    ``options``: ``cluster`` (default ``sophia``) and ``reasoning_effort`` (for models with
+    reasoning levels, e.g. ``low`` to save tokens)."""
+
+    provider = "alcf"
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        cluster: str = "sophia",
+        base_url: str | None = None,
+        api_key: str | None = None,
+        api_key_env: str | None = None,
+        reasoning_effort: str | None = None,
+        **kwargs: Any,
+    ):
+        self._api_key_env = api_key_env
+        super().__init__(
+            model,
+            base_url=base_url or alcf_base_url(cluster),
+            api_key=api_key or alcf_token(api_key_env),
+            **kwargs,
+        )
+        self.cluster = cluster
+        if reasoning_effort:
+            self._extra["reasoning_effort"] = reasoning_effort
+
+    async def _complete(self, messages, **kw):
+        try:
+            return await super()._complete(messages, **kw)
+        except Exception as exc:  # noqa: BLE001
+            if getattr(exc, "status_code", None) != 401:
+                raise
+            # the 48-hour token expired mid-run: fetch a refreshed one and try once more
+            self._client.api_key = await asyncio.to_thread(
+                alcf_token, self._api_key_env, refresh=True
+            )
+            return await super()._complete(messages, **kw)
 
 
 # ------------------------------------------------------------------------ Anthropic
@@ -364,6 +555,10 @@ def build_llm(
     provider = provider.lower()
     if provider in ("openai", "openai-compatible", "vllm", "ollama"):
         return OpenAILLM(model, cache=cache, **kwargs)
+    if provider in ("asksage", "ask-sage", "ask_sage"):
+        return AskSageLLM(model, cache=cache, **kwargs)
+    if provider == "alcf":
+        return ALCFLLM(model, cache=cache, **kwargs)
     if provider == "anthropic":
         return AnthropicLLM(model, cache=cache, **kwargs)
     if provider == "argo":

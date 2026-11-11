@@ -1,0 +1,46 @@
+# Open-weight models on the ALCF inference endpoints (https://docs.alcf.anl.gov/services/inference-endpoints/).
+#   uv tool install alcf-tokens && alcf-tokens login inference     # once; re-login every 30 days
+#   uv run trivium generate --input <docs> --config examples/config.alcf.yaml \
+#       --mode trivia --best 4 -n 12 -o runs/x/questions.json --jsonl-dir runs/x/bundle
+#   uv run trivium serve --config examples/config.alcf.yaml
+# trivium gets the access token from `alcf-tokens get-token inference` (or $ALCF_ACCESS_TOKEN)
+# and refreshes it if it expires during a run.
+# options.cluster picks the cluster: sophia (vLLM, default), metis, minerva or tara. Models
+# marked "always hot" in the docs answer at once; others are queued and loaded on first request,
+# which can take many minutes. Current list:
+#   curl -H "Authorization: Bearer $(alcf-tokens get-token inference)" \
+#        https://inference-api.alcf.anl.gov/resource_server/list-endpoints
+mode: trivia
+
+models:
+  default:
+    provider: alcf
+    model: openai/gpt-oss-120b          # hot on Sophia
+    temperature: 0.0
+    max_tokens: 4096                    # reasoning models spend part of this on reasoning
+    max_concurrency: 8                  # service limit: 20 requests/s per caller
+  roles:
+    # grade with a different model family than the generator
+    quality_evaluator: {model: mistral-large-4-nvfp4, options: {cluster: minerva}}
+    judge:             {model: mistral-large-4-nvfp4, options: {cluster: minerva}}
+    difficulty_small:  {model: meta-llama/Meta-Llama-3.1-8B-Instruct}
+    difficulty_medium: {model: openai/gpt-oss-20b}
+    difficulty_large:  {model: openai/gpt-oss-120b}
+  embeddings:
+    provider: alcf
+    model: google/embeddinggemma-300m
+    options: {cluster: sophia}
+
+evaluation:
+  closed_book_trials: 3
+  open_book_trials: 1
+  difficulty_trials: 2
+  use_llm_judge: true
+
+generation:
+  batch_size: 8
+  question_types: [short_answer, true_false, multiple_choice]
+
+cache:
+  enabled: true
+  dir: .trivium_cache

@@ -85,6 +85,7 @@ class OpenAIEmbedder(Embedder):
         *,
         base_url: str | None = None,
         api_key_env: str = "OPENAI_API_KEY",
+        api_key: str | None = None,
         cache: ResponseCache | None = None,
         batch_size: int = 64,
     ):
@@ -96,7 +97,7 @@ class OpenAIEmbedder(Embedder):
         self.cache = cache
         self.batch_size = batch_size
         self._client = AsyncOpenAI(
-            api_key=os.environ.get(api_key_env) or "none",
+            api_key=api_key or os.environ.get(api_key_env) or "none",
             base_url=base_url or os.environ.get("OPENAI_BASE_URL"),
         )
 
@@ -152,7 +153,7 @@ class SentenceTransformerEmbedder(Embedder):
 
 async def with_retries(fn, *args, attempts: int = 5, what: str = "embedding call", **kwargs):
     """Await ``fn(*args, **kwargs)`` with exponential backoff on transient errors."""
-    from trivium.models.llm import LLMError, is_retryable
+    from trivium.models.llm import LLMError, ProviderAccessError, access_denied, is_retryable
 
     last: Exception | None = None
     for attempt in range(attempts):
@@ -160,6 +161,9 @@ async def with_retries(fn, *args, attempts: int = 5, what: str = "embedding call
             return await fn(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001 — provider errors are heterogeneous
             last = exc
+            notice = access_denied(str(exc))
+            if notice:
+                raise ProviderAccessError(f"{what} refused service: {notice}") from exc
             if not is_retryable(exc) or attempt == attempts - 1:
                 break
             await asyncio.sleep(min(2**attempt, 15))  # 1+2+4+8+15 s window
@@ -174,6 +178,25 @@ def build_embedder(
         return HashingEmbedder(**{k: v for k, v in kw.items() if k == "dim"})
     if provider in ("openai", "openai-compatible"):
         return OpenAIEmbedder(model or "text-embedding-3-small", cache=cache, **kw)
+    if provider in ("asksage", "ask-sage", "ask_sage"):
+        from trivium.models.llm import asksage_endpoint
+
+        url, key = asksage_endpoint(kw.pop("base_url", None), kw.pop("api_key_env", None))
+        emb = OpenAIEmbedder(
+            model or "text-embedding-3-large", cache=cache, base_url=url, api_key=key, **kw
+        )
+        emb.name = "asksage"
+        return emb
+    if provider == "alcf":
+        from trivium.models.llm import alcf_base_url, alcf_token
+
+        url = kw.pop("base_url", None) or alcf_base_url(kw.pop("cluster", "sophia"))
+        key = alcf_token(kw.pop("api_key_env", None))
+        emb = OpenAIEmbedder(
+            model or "google/embeddinggemma-300m", cache=cache, base_url=url, api_key=key, **kw
+        )
+        emb.name = "alcf"
+        return emb
     if provider == "argo":
         from trivium.models.argo import ArgoEmbedder
 

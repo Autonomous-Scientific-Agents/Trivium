@@ -67,6 +67,8 @@ class MultiHopGenerator(Generator):
         q = norm(gq.question)
         if _mentions(q, bridge) or _mentions(q, answer):
             return None  # bridge or answer leaked → not really multi-hop
+        if f2.object.is_numeric and gq.answer_kind not in ("number", "date"):
+            gq.answer_kind = "number"
         return self.ctx.make_candidate(
             gq,
             [f1, f2],

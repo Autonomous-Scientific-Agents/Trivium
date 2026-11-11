@@ -119,6 +119,7 @@ def dataset_metrics(
         "average_closed_book_accuracy": mean("closed_book_accuracy"),
         "average_open_book_accuracy": mean("open_book_accuracy"),
         "average_novelty": mean("novelty"),
+        "average_lexical_overlap": mean("lexical_overlap"),
         "fact_coverage": coverage.get("fact_coverage"),
         "section_coverage": coverage.get("section_coverage"),
         "document_coverage": coverage.get("document_coverage"),
