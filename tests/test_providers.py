@@ -218,3 +218,45 @@ def test_alcf_without_a_token_explains_how_to_log_in(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: None)
     with pytest.raises(ValueError, match="alcf-tokens login inference"):
         llm_mod.alcf_token()
+
+
+# ------------------------------------------------------------------- mixed providers
+def test_role_switching_provider_drops_default_endpoint_and_options():
+    from trivium.config import ModelsConfig
+
+    models = ModelsConfig.model_validate(
+        {
+            "default": {
+                "provider": "openai",
+                "base_url": "http://127.0.0.1:44497/v1",
+                "api_key_env": "ARGO_USER",
+                "model": "gpt41",
+                "max_tokens": 3000,
+                "options": {"user": "me"},
+            },
+            "roles": {
+                "judge": {"provider": "alcf", "model": "m", "options": {"cluster": "tara"}},
+                "open_book": {"model": "gpt41mini"},  # same provider: inherits everything
+            },
+        }
+    )
+    judge = models.spec_for("judge")
+    assert judge.base_url is None and judge.api_key_env == "OPENAI_API_KEY"
+    assert judge.options == {"cluster": "tara"} and judge.max_tokens == 3000
+    ob = models.spec_for("open_book")
+    assert ob.base_url == "http://127.0.0.1:44497/v1" and ob.options == {"user": "me"}
+
+
+def test_mixed_example_config(alcf_env, sage_env, tmp_path):
+    from trivium.models.llm import ALCFLLM
+
+    sage_env.setenv("ASK_SAGE_API", "sage-key")
+    cfg = Config.load(
+        "examples/config.mixed.yaml", cache={"enabled": False}, output=str(tmp_path / "q.json")
+    )
+    reg = ModelRegistry(cfg)
+    assert isinstance(reg["question_generator"], ALCFLLM)
+    assert isinstance(reg["judge"], AskSageLLM) and reg["judge"]._client.api_key == "sage-key"
+    assert str(reg["judge"]._client.base_url).rstrip("/") == ASKSAGE_BASE_URL
+    assert reg["open_book"].cluster == "minerva"
+    assert reg.embedder.name == "alcf"

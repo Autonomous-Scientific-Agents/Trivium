@@ -82,6 +82,12 @@ endpoints via `base_url`), `anthropic`, `argo` (Argonne's Argo Gateway, see belo
 `alcf` (open-weight models on the ALCF inference endpoints, see below), and `mock`
 (deterministic, offline). Environment overrides: `TRIVIUM_PROVIDER`, `TRIVIUM_MODEL`, `TRIVIUM_BASE_URL`.
 
+**Mixing providers.** Each role can use a different provider, e.g. open-weight models on ALCF to
+write questions and a different model family on Ask Sage or Argo to grade them
+(`examples/config.mixed.yaml`). Role entries are merged onto `default`. A role that switches
+provider keeps `default`'s temperature, `max_tokens` and concurrency, but not its `base_url`,
+`api_key_env` or `options`. Embeddings are configured separately under `models.embeddings`.
+
 **Avoid self-evaluation.** By default the question generator, quality evaluator, open-book
 answerer and large difficulty tier all resolve to `models.default`, so a model grades its own
 questions. For datasets you intend to publish, set `roles.quality_evaluator`, `roles.judge` and

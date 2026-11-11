@@ -64,7 +64,10 @@ class ModelSpec(BaseModel):
         )
 
     def merged(self, override: dict[str, Any] | ModelSpec | None) -> ModelSpec:
-        """Return a validated copy with ``override`` applied; ``options`` dicts are merged."""
+        """Return a validated copy with ``override`` applied; ``options`` dicts are merged.
+
+        An override that switches provider keeps only provider-neutral settings (temperature,
+        max_tokens, concurrency) from this spec, not its base_url, api_key_env or options."""
         if override is None:
             return self
         data = (
@@ -72,8 +75,14 @@ class ModelSpec(BaseModel):
             if isinstance(override, ModelSpec)
             else dict(override)
         )
-        merged_opts = {**self.options, **(data.pop("options", None) or {})}
-        return ModelSpec.model_validate({**self.model_dump(), **data, "options": merged_opts})
+        base = self.model_dump()
+        if str(data.get("provider") or self.provider).lower() != self.provider.lower():
+            # another provider: the default's endpoint, key and client options do not apply
+            for k in ("base_url", "api_key_env"):
+                base.pop(k)
+            base["options"] = {}
+        merged_opts = {**base["options"], **(data.pop("options", None) or {})}
+        return ModelSpec.model_validate({**base, **data, "options": merged_opts})
 
 
 class EmbeddingSpec(BaseModel):
