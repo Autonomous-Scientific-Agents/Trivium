@@ -169,7 +169,7 @@ def test_registry_builds_alcf_models_per_cluster(alcf_env, tmp_path):
     assert str(gen._client.base_url).rstrip("/").endswith("/sophia/vllm/v1")
     assert judge.cluster == "minerva" and judge.model == "mistral-large-4-nvfp4"
     assert gen._client.api_key == "globus-token"
-    assert reg.embedder.name == "alcf" and reg.embedder.model == "google/embeddinggemma-300m"
+    assert reg.embedder.name == "alcf" and reg.embedder.model == "Salesforce/SFR-Embedding-Mistral"
 
 
 async def test_alcf_options_and_parameters(alcf_env):

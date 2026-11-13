@@ -18,6 +18,7 @@ from trivium.evaluation.form import (
     generic_answer,
     lexical_overlap,
     local_label,
+    placeholder_answer,
     source_reference,
 )
 from trivium.evaluation.quality import heuristic_leakage, score_quality
@@ -376,6 +377,8 @@ class Evaluator:
             out.append("source_reference")
         if self.cfg.is_trivia and local_label(text):
             out.append("local_label")
+        if placeholder_answer(cand.answer):
+            out.append("placeholder_answer")
         if cand.answer_type in ("short_answer", "numeric"):
             if generic_answer(cand.answer):
                 out.append("generic_answer")

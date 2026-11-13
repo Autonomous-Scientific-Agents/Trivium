@@ -7,7 +7,13 @@ from conftest import mock_config
 
 from trivium.config import Config, Difficulty
 from trivium.evaluation.evaluator import EvaluatedCandidate, Evaluation, Evaluator, option_picks
-from trivium.evaluation.form import clause_answer, generic_answer, local_label, source_reference
+from trivium.evaluation.form import (
+    clause_answer,
+    generic_answer,
+    local_label,
+    placeholder_answer,
+    source_reference,
+)
 from trivium.facts.store import FactStore, norm
 from trivium.facts.trivia import score_trivia
 from trivium.generation.base import Candidate, GenerationContext
@@ -101,6 +107,27 @@ def test_crisp_answers_pass(answer):
     assert not generic_answer(answer) and not clause_answer(answer)
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "<fs1:fs2>",
+        "-l filesystems=<fs1:fs2>",
+        "/path/to/image.sif",
+        "YOUR_PROJECT",
+        "{{ project }}",
+    ],
+)
+def test_placeholder_answers(answer):
+    assert placeholder_answer(answer)
+
+
+@pytest.mark.parametrize(
+    "answer", ["flare:home", "std::vector<int>", "ZE_AFFINITY_MASK", "your home directory", "x < y"]
+)
+def test_real_answers_are_not_placeholders(answer):
+    assert not placeholder_answer(answer)
+
+
 def _cand(**kw):
     base = dict(
         id="c1",
@@ -128,6 +155,8 @@ def test_evaluator_form_problems_depend_on_mode(knowledge_base):
     assert "clause_answer" in trivia.form_problems(clause) and not rag.form_problems(clause)
     assert "answer_kind_other" in trivia.form_problems(_cand(answer_kind="other"))
     assert "answer_not_in_evidence" in trivia.form_problems(_cand())  # no fact backs it
+    mc = _cand(answer="<fs1:fs2>", answer_type="multiple_choice")
+    assert "placeholder_answer" in rag.form_problems(mc)
     f = next(x for x in store if not x.object.is_numeric)
     grounded = _cand(answer=f.object.display(), source_fact_ids=[f.id], answer_kind="name")
     assert trivia.form_problems(grounded) == []

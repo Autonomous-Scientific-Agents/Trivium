@@ -194,7 +194,11 @@ def build_embedder(
         url = kw.pop("base_url", None) or alcf_base_url(cluster)
         key = alcf_token(kw.pop("api_key_env", None))
         emb = OpenAIEmbedder(
-            model or "google/embeddinggemma-300m", cache=cache, base_url=url, api_key=key, **kw
+            model or "Salesforce/SFR-Embedding-Mistral",
+            cache=cache,
+            base_url=url,
+            api_key=key,
+            **kw,
         )
         emb.name = "alcf"
         return emb

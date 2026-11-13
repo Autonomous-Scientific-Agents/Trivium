@@ -24,7 +24,9 @@ models:
     # judge: {provider: openai, base_url: "http://127.0.0.1:44497/v1", api_key_env: ARGO_USER, model: gpt41}
   embeddings:
     provider: alcf
-    model: google/embeddinggemma-300m
+    # not google/embeddinggemma-300m: through this endpoint it rates unrelated texts ~0.96
+    # similar, so every question looks like a duplicate
+    model: Salesforce/SFR-Embedding-Mistral
 
 evaluation:
   closed_book_trials: 3

@@ -122,6 +122,22 @@ def _proper_after_first(tokens: list[str]) -> bool:
     )
 
 
+# Template slots copied from command examples: "<fs1:fs2>", "<project_name>", "/path/to/dir",
+# "YOUR_PROJECT", "xxx". Not a fact anyone can recall.
+PLACEHOLDER = re.compile(
+    r"(?<![\w:])<[^<>\s][^<>]{0,40}>"  # not std::vector<int>
+    r"|\{\{[^{}]{1,40}\}\}"
+    r"|\bpath/to\b"
+    r"|\b(?i:your)[_-]\w+|\b(?i:your) (?:project|username|user ?name|allocation|file|directory|dir)\b"
+    r"|\b(?:x{3,}|X{3,})\b"
+)
+
+
+def placeholder_answer(answer: str) -> str | None:
+    m = PLACEHOLDER.search(answer)
+    return m.group(0) if m else None
+
+
 def generic_answer(answer: str) -> bool:
     """A vague or relative answer ("larger matrix", "either method", "important parameter").
 

@@ -28,7 +28,9 @@ models:
     difficulty_large:  {model: openai/gpt-oss-120b}
   embeddings:
     provider: alcf
-    model: google/embeddinggemma-300m
+    # not google/embeddinggemma-300m: through this endpoint it rates unrelated texts ~0.96
+    # similar, so every question looks like a duplicate
+    model: Salesforce/SFR-Embedding-Mistral
     options: {cluster: sophia}
 
 evaluation:
