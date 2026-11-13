@@ -49,6 +49,7 @@ dev = [
     "pypdf>=4.0",
     "fastapi>=0.110",
     "python-multipart>=0.0.9",
+    "openai>=1.30",
 ]
 
 [build-system]

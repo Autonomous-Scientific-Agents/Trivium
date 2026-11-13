@@ -1826,6 +1826,7 @@ web = [
 [package.dev-dependencies]
 dev = [
     { name = "fastapi" },
+    { name = "openai" },
     { name = "pypdf" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1856,6 +1857,7 @@ provides-extras = ["openai", "anthropic", "pdf", "embeddings", "all", "web"]
 [package.metadata.requires-dev]
 dev = [
     { name = "fastapi", specifier = ">=0.110" },
+    { name = "openai", specifier = ">=1.30" },
     { name = "pypdf", specifier = ">=4.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
