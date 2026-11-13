@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>trivium review</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">trivium <span>review</span></a>
+    <label class="reviewer">Reviewer
+      <input id="reviewer" type="text" placeholder="your name (optional)" autocomplete="name">
+    </label>
+  </header>
+  <div class="layout">
+    <nav class="sidebar" aria-label="Runs">
+      <a class="btn primary new-run" href="#/new">+ New run</a>
+      <ul id="run-list" class="run-list"></ul>
+      <p id="workspace" class="muted small"></p>
+    </nav>
+    <main id="main" class="main" tabindex="-1"></main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

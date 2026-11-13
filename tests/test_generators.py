@@ -9,7 +9,9 @@ from trivium.generation.multihop import MultiHopGenerator
 from trivium.generation.true_false import TrueFalseGenerator
 
 
-@pytest.mark.parametrize("name", list(GENERATORS))
+@pytest.mark.parametrize(
+    "name", [n for n in GENERATORS if n != "persona"]
+)  # persona: test_persona.py
 async def test_every_strategy_is_available_and_produces_candidates(ctx, name):
     gen = GENERATORS[name](ctx)
     assert gen.available(), name

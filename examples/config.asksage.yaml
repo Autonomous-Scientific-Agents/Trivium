@@ -1,0 +1,41 @@
+# Ask Sage (ANL instance) through its OpenAI-compatible API.
+#   export ASK_SAGE_API=<your Ask Sage API key>     # or: source ~/.bash_secrets
+#   uv run trivium generate --input <docs> --config examples/config.asksage.yaml \
+#       --mode trivia --best 4 -n 12 -o runs/x/questions.json --jsonl-dir runs/x/bundle
+#   uv run trivium serve --config examples/config.asksage.yaml
+# Another Ask Sage instance: set base_url (models and embeddings) or $ASK_SAGE_BASE_URL, e.g.
+# https://api.asksage.ai/server/openai/v1.
+# Ask Sage lists more models than a key may use: a refused model fails with "Requested model is
+# not available". Models that answered for this key (2026-11): gpt-5.4-nano, gpt-5.6-luna,
+# gpt-5.6-terra, gpt-6-luna.
+mode: trivia
+
+models:
+  default:
+    provider: asksage
+    model: gpt-6-luna
+    temperature: 0.0
+    max_tokens: 4096          # reasoning models count hidden reasoning tokens against this
+    max_concurrency: 6
+  roles:
+    judge:             {model: gpt-5.6-terra}
+    difficulty_small:  {model: gpt-5.4-nano}
+    difficulty_medium: {model: gpt-5.6-luna}
+    difficulty_large:  {model: gpt-6-luna}
+  embeddings:
+    provider: asksage
+    model: text-embedding-3-large   # text-embedding-3-small is unavailable on the ANL instance
+
+evaluation:
+  closed_book_trials: 3
+  open_book_trials: 1
+  difficulty_trials: 2
+  use_llm_judge: true
+
+generation:
+  batch_size: 8
+  question_types: [short_answer, true_false, multiple_choice]
+
+cache:
+  enabled: true
+  dir: .trivium_cache

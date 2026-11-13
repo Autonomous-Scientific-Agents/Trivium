@@ -1,0 +1,42 @@
+# Argo through a local argo-proxy (OpenAI-compatible), e.g. an ssh tunnel to an on-site proxy.
+# Use this when the Argo gateway itself is not reachable from your machine.
+#   argo up                       # tunnel + proxy at http://127.0.0.1:44497
+#   export ARGO_USER=<your ANL domain username>
+#   uv run trivium generate --input <docs> --config examples/config.argo-proxy.yaml \
+#       --mode trivia --best 4 -n 12 -o runs/x/questions.json --jsonl-dir runs/x/bundle
+#   uv run trivium serve --config examples/config.argo-proxy.yaml
+mode: trivia
+
+models:
+  default:
+    provider: openai
+    base_url: http://127.0.0.1:44497/v1
+    api_key_env: ARGO_USER      # Argo authenticates with the ANL username
+    model: gpt41
+    temperature: 0.0
+    max_tokens: 2048
+    max_concurrency: 6          # Argo is a shared gateway
+  roles:
+    judge:             {model: gpt41mini}
+    difficulty_small:  {model: gpt41nano}
+    difficulty_medium: {model: gpt41mini}
+    difficulty_large:  {model: gpt41}
+  embeddings:
+    provider: openai
+    model: v3small
+    base_url: http://127.0.0.1:44497/v1
+    options: {api_key_env: ARGO_USER}
+
+evaluation:
+  closed_book_trials: 3
+  open_book_trials: 1
+  difficulty_trials: 2
+  use_llm_judge: true
+
+generation:
+  batch_size: 8
+  question_types: [short_answer, true_false, multiple_choice]
+
+cache:
+  enabled: true
+  dir: .trivium_cache

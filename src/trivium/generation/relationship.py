@@ -56,6 +56,8 @@ class RelationshipGenerator(Generator):
             return None  # answer leaked into the question
         if target.object.is_numeric:
             gq.answer_type = "numeric"
+            if gq.answer_kind not in ("number", "date"):
+                gq.answer_kind = "number"
             gq.accepted_answers = list(
                 {*gq.accepted_answers, fmt_number(target.object.value), target.object.text}
             )

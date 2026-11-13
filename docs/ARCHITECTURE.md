@@ -30,6 +30,7 @@
 | §32 parallelism | `asyncio.gather` throughout; per-model `Semaphore(max_concurrency)` |
 | §33 stopping criteria | `orchestration/stopping.py::should_stop` |
 | (extension) best-of selection `--best K` | `orchestration/selection.py` (`challenge_score`, `interest_score`, `rank`), `Controller._select_best`, `GenerationConfig.select_top/select_by/prefer_difficulty` |
+| (extension) trivia mode | `facts/trivia.py` (document briefs, `Fact.trivia_score`), `GenerationContext.trivia_context`, `evaluation/form.py` (source references, local labels, generic/clause answers), typed distractors in `generation/multiple_choice.py`, falsification kinds in `generation/true_false.py`, `selection.tournament` |
 | §34 dataset-level metrics | `output/schema.py::dataset_metrics` |
 
 ## Evaluation order (cost-aware early exit)
@@ -65,3 +66,23 @@
 * True/false numeric perturbations shift years by a few years and scale other quantities by 0.6–1.6 at
   the original precision ("founded in 3886", "0.4375 eV" were the previous behaviour).
 * Derived ratios are disabled for year-like operands (differences remain).
+
+## Refinements for trivia quality (2026-11-08)
+
+Motivated by the first real-paper runs, where most accepted items were routine lookups
+("What was the simulation temperature in Run 2?"), answers were clauses ("only at the beginning of
+the SCF cycles"), distractors were generic or type-mismatched ("Institution Y", "5 Angstrom" among
+durations) and true/false items were single-value perturbations.
+
+* Facts are scored for trivia value against a per-document brief before generation (trivia mode);
+  the score dominates fact sampling and the coverage push is halved.
+* The question writer declares `answer_kind`; deterministic form checks reject source references
+  (all modes), local labels, generic and clause answers (trivia). The rubric gains `standalone`.
+* Multiple-choice distractors come from typed pools: `in_document` (same role: same predicate,
+  unit and magnitude, or the competing subjects), `misconception` (wrong closed-book answers, which
+  were previously discarded), `near_miss`; facts about the same *subject* are no longer used (they
+  produced type mismatches). Option sets are checked for format giveaways and with an options-only
+  probe; per-option closed-book picks are recorded.
+* True/false gains subject swaps, qualifier swaps, comparison flips and LLM single edits; true
+  statements are paraphrased and statements are capped (`max_statement_words`).
+* `--best` ranking uses a Swiss pairwise tournament for interestingness.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 
-from trivium.facts.models import Fact, fmt_number
+from trivium.facts.models import Fact, fmt_number, is_setting
 from trivium.generation.base import Candidate, Generator
 from trivium.generation.comparison import comparable_groups
 from trivium.generation.true_false import is_year_like
@@ -46,6 +46,8 @@ class DerivedGenerator(Generator):
         # same subject, same predicate, different qualifiers (e.g. initial vs final)
         by_key: dict[tuple[str, str, str], list[Fact]] = {}
         for f in self.ctx.store.numeric_facts():
+            if is_setting(f):
+                continue
             by_key.setdefault(
                 (f.subject.lower(), f.predicate, (f.object.unit or "").lower()), []
             ).append(f)
@@ -117,6 +119,7 @@ class DerivedGenerator(Generator):
         if gq is None:
             return None
         gq.answer_type = "numeric"
+        gq.answer_kind = "number"
         gq.accepted_answers = list(dict.fromkeys([*gq.accepted_answers, *accepted]))
         return self.ctx.make_candidate(
             gq, [a, b], self.name, reasoning_depth=2, derivation=derivation

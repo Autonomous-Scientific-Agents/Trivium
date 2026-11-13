@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-PROMPT_VERSION = "2026.09.1"
+PROMPT_VERSION = "2026.11.2"
 
 SYSTEM_BASE = (
     "You are a meticulous scientific assistant helping build an objectively gradable "

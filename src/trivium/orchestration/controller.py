@@ -12,13 +12,14 @@ from trivium.config import Config, Difficulty, QuestionType
 from trivium.evaluation.evaluator import EvaluatedCandidate, Evaluator
 from trivium.facts.extractor import extract_facts
 from trivium.facts.store import FactStore
+from trivium.facts.trivia import DocumentBrief, score_trivia
 from trivium.facts.validator import validate_facts
 from trivium.generation import GENERATORS, GenerationContext, Generator, MultipleChoiceConverter
 from trivium.graph.builder import build_graph
 from trivium.ingestion.chunker import chunk_documents
 from trivium.ingestion.loader import load_inputs
 from trivium.ingestion.models import Chunk, Document
-from trivium.models.llm import LLMError
+from trivium.models.llm import LLMError, ProviderAccessError
 from trivium.models.registry import ModelRegistry
 from trivium.orchestration import coverage as cov
 from trivium.orchestration import selection
@@ -47,6 +48,7 @@ class GenerationRun:
     n_candidates: int = 0
     strategy_stats: dict = field(default_factory=dict)
     llm_calls: int = 0
+    briefs: dict = field(default_factory=dict)  # document_id → DocumentBrief (trivia mode)
 
     def to_dataset(self) -> Dataset:
         records = [
@@ -64,6 +66,11 @@ class GenerationRun:
                     "title": d.title,
                     "source": d.source,
                     "retrieved_at": d.retrieved_at.isoformat(timespec="seconds"),
+                    **(
+                        {"brief": self.briefs[d.id].model_dump(exclude={"document_id", "title"})}
+                        if d.id in self.briefs
+                        else {}
+                    ),
                 }
                 for d in self.documents
             ],
@@ -121,10 +128,17 @@ class Controller:
         documents: list[Document],
         chunks: list[Chunk],
         store: FactStore,
+        briefs: dict[str, DocumentBrief] | None = None,
     ):
         self.cfg = config
         self.models = models
-        self.run = GenerationRun(config=config, documents=documents, chunks=chunks, store=store)
+        self.run = GenerationRun(
+            config=config,
+            documents=documents,
+            chunks=chunks,
+            store=store,
+            briefs=dict(briefs or {}),
+        )
         self.graph = build_graph(store)
         self.rng = random.Random(config.generation.seed)
         self.evaluator = Evaluator(config, models, store, chunks)
@@ -135,6 +149,8 @@ class Controller:
             chunks={c.id: c for c in chunks},
             llm=models["question_generator"],
             rng=self.rng,
+            briefs=dict(briefs or {}),
+            embedder=models.embedder,
         )
         self.generators: dict[str, Generator] = {
             name: cls(self.ctx) for name, cls in GENERATORS.items()
@@ -145,11 +161,14 @@ class Controller:
             config.generation, {n: g.available() for n, g in self.generators.items()}
         )
         self.mc = (
-            MultipleChoiceConverter(self.ctx)
+            MultipleChoiceConverter(
+                self.ctx, probe=models.get("difficulty_small") or models.get("closed_book")
+            )
             if QuestionType.multiple_choice in config.generation.question_types
             else None
         )
         self.rejections: Counter = Counter()
+        self.mc_failures: Counter = Counter()  # why multiple-choice conversions fell back
         self.run.target = self._target()
 
     def _target(self) -> int:
@@ -173,13 +192,32 @@ class Controller:
         return target
 
     # ------------------------------------------------------------------ loop
-    def _select_best(self) -> None:
+    async def _select_best(self) -> None:
         """Keep the top-k of the accepted pool when ``generation.select_top`` is set."""
         k = self.cfg.generation.select_top
         if not k or len(self.run.accepted) <= 0:
             return
         by = self.cfg.effective_select_by
-        ordered = selection.rank(self.run.accepted, by)
+        pairwise = None
+        judge = self.models.get("judge")
+        rounds = self.cfg.trivia.pairwise_rounds
+        if (
+            by in ("interest", "trivia")
+            and judge is not None
+            and rounds > 0
+            and len(self.run.accepted) > k
+        ):
+            try:
+                pairwise = await selection.tournament(
+                    judge,
+                    self.run.accepted,
+                    rounds=rounds,
+                    rng=random.Random(self.cfg.generation.seed),
+                    audience=self.cfg.generation.personas,
+                )
+            except LLMError as exc:
+                log.warning("pairwise tournament failed, using rubric interestingness: %s", exc)
+        ordered = selection.rank(self.run.accepted, by, pairwise=pairwise)
         keep, drop = ordered[:k], ordered[k:]
         for ec in drop:
             ec.evaluation.accepted = False
@@ -205,8 +243,19 @@ class Controller:
             log.error("stopping after infrastructure error: %s", exc)
             self.run.stop_reason = "infrastructure_error"
             self.run.error = str(exc)[:500]
-        self._select_best()
+        except ProviderAccessError as exc:
+            # stop calling the provider, but keep (select, write) what was already accepted
+            log.error("stopping, the provider refused service: %s", exc)
+            self.run.stop_reason = "provider_refused"
+            self.run.error = str(exc)[:500]
+        await self._select_best()
         self.run.strategy_stats = self.selector.summary()
+        if self.mc_failures:
+            self.run.strategy_stats["multiple_choice_fallbacks"] = dict(self.mc_failures)
+        persona = self.generators.get("persona")
+        if persona is not None and getattr(persona, "gaps", None):
+            # questions the persona asked that the sources do not (fully) answer
+            self.run.strategy_stats["persona_gaps"] = persona.gaps[:200]
         self.run.llm_calls = self.models.total_calls()
         log.info(
             "stopped: %s after %d rounds; %d accepted from %d candidates",
@@ -350,13 +399,21 @@ class Controller:
         )
         if want <= 0 or have >= want * max(1, self.run.target):
             return ec
-        mc = await self.mc.convert(ec.candidate, self.evaluator.evidence_texts(ec.candidate))
+        mc = await self.mc.convert(
+            ec.candidate,
+            self.evaluator.evidence_texts(ec.candidate),
+            closed_book_answers=ec.evaluation.closed_book_answers,
+        )
         if mc is None:
+            self.rejections["bad_distractors"] += 1
+            self.mc_failures[self.mc.last_failure or "distractor_error"] += 1
             return ec
         ec_mc = await self.evaluator.evaluate(mc)
         if ec_mc.evaluation.accepted:
             return ec_mc
         self.rejections["bad_distractors"] += 1
+        for r in ec_mc.evaluation.rejection_reasons:
+            self.mc_failures[r] += 1
         return ec
 
 
@@ -368,7 +425,17 @@ async def generate_dataset(config: Config, *, write: bool = True) -> tuple[Datas
         chunks, store = await build_knowledge_base(config, models, documents)
         if len(store) == 0:
             raise RuntimeError("no validated facts were extracted; cannot generate questions")
-        controller = Controller(config, models, documents, chunks, store)
+        briefs = None
+        if config.score_trivia_facts:
+            briefs = await score_trivia(
+                models["trivia_scorer"],
+                store,
+                chunks,
+                config.trivia,
+                titles={d.id: d.title for d in documents},
+                audience=config.generation.personas,
+            )
+        controller = Controller(config, models, documents, chunks, store, briefs=briefs)
         run = await controller.loop()
         dataset = run.to_dataset()
         dataset.dataset.models = models.describe()

@@ -41,6 +41,8 @@ class StrategySelector:
         self.base = dict(gen_cfg.strategy_weights)
         if QuestionType.true_false in gen_cfg.question_types:
             self.base.setdefault("true_false", 0.2)
+        if gen_cfg.personas:
+            self.base.setdefault("persona", gen_cfg.persona_weight)
 
     # ------------------------------------------------------------- bookkeeping
     def record_generated(self, strategy: str, n: int) -> None:
@@ -81,6 +83,7 @@ class StrategySelector:
                 x *= {
                     "atomic": 0.4,
                     "true_false": 0.5,
+                    "persona": 1.2,
                     "comparison": 1.6,
                     "derived": 1.6,
                     "multi_hop": 1.8,

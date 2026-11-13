@@ -35,6 +35,8 @@ class AtomicGenerator(Generator):
             return None
         if fact.object.is_numeric and answers_match(gq.answer, fact.object.display()):
             gq.answer_type = "numeric"
+            if gq.answer_kind not in ("number", "date"):
+                gq.answer_kind = "number"
             for alt in (fmt_number(fact.object.value), fact.object.display(), fact.object.text):
                 if alt and alt not in gq.accepted_answers:
                     gq.accepted_answers.append(alt)

@@ -1,0 +1,41 @@
+# Mixing providers: every role can use its own provider. A role that switches provider does not
+# inherit `default`'s base_url, api_key_env or options; it keeps temperature, max_tokens and
+# max_concurrency. Credentials: alcf-tokens login inference, and $ASK_SAGE_API (see
+# config.alcf.yaml, config.asksage.yaml, config.argo-proxy.yaml).
+# Here open-weight models on ALCF write the questions and set difficulty, and a model from another
+# family on Ask Sage grades them, so no model grades its own questions.
+mode: trivia
+
+models:
+  default:
+    provider: alcf
+    model: openai/gpt-oss-120b            # Sophia
+    temperature: 0.0
+    max_tokens: 4096
+    max_concurrency: 8
+  roles:
+    quality_evaluator: {provider: asksage, model: gpt-6-luna, max_concurrency: 6}
+    judge:             {provider: asksage, model: gpt-6-luna, max_concurrency: 6}
+    open_book:         {model: mistral-large-4-nvfp4, options: {cluster: minerva}}
+    difficulty_small:  {model: meta-llama/Meta-Llama-3.1-8B-Instruct}
+    difficulty_medium: {model: openai/gpt-oss-20b}
+    difficulty_large:  {model: openai/gpt-oss-120b}
+    # Argo through the local argo-proxy (`argo up`, $ARGO_USER), e.g.:
+    # judge: {provider: openai, base_url: "http://127.0.0.1:44497/v1", api_key_env: ARGO_USER, model: gpt41}
+  embeddings:
+    provider: alcf
+    model: google/embeddinggemma-300m
+
+evaluation:
+  closed_book_trials: 3
+  open_book_trials: 1
+  difficulty_trials: 2
+  use_llm_judge: true
+
+generation:
+  batch_size: 8
+  question_types: [short_answer, true_false, multiple_choice]
+
+cache:
+  enabled: true
+  dir: .trivium_cache

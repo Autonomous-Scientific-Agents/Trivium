@@ -1,4 +1,4 @@
-"""Command-line interface: ``trivium generate``, ``trivium extract``, ``trivium stats``."""
+"""Command-line interface: ``trivium generate | extract | stats | serve``."""
 
 from __future__ import annotations
 
@@ -16,7 +16,9 @@ from trivium.config import Config
 
 def _common_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--config", help="YAML config file (see examples/config.yaml)")
-    p.add_argument("--provider", help="default LLM provider: openai | anthropic | argo | mock")
+    p.add_argument(
+        "--provider", help="default LLM provider: openai | anthropic | argo | asksage | alcf | mock"
+    )
     p.add_argument("--model", help="default model name for all roles")
     p.add_argument("--base-url", help="OpenAI-compatible endpoint URL")
     p.add_argument("--no-cache", action="store_true", help="disable the on-disk response cache")
@@ -67,6 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--hard", type=int)
     g.add_argument("--question-types", help="comma list: short_answer,true_false,multiple_choice")
     g.add_argument("--max-answer-words", type=int)
+    g.add_argument(
+        "--persona",
+        action="append",
+        metavar="TEXT",
+        help="who asks (repeatable), e.g. 'a new user on their first allocation'; steers scoring, "
+        "writing and ranking, and adds gap-driven questions asked from the outline only",
+    )
     g.add_argument("--require-document-dependence", action="store_true")
     g.add_argument("--multi-hop-ratio", type=float)
     g.add_argument("--cross-document-ratio", type=float)
@@ -87,6 +96,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("stats", help="print dataset-level metrics of a questions.json file")
     s.add_argument("path")
+
+    fr = sub.add_parser(
+        "feedback-report",
+        help="summarise review-UI ratings: 👍 rate by strategy/type and agreement of scores",
+    )
+    fr.add_argument("runs", nargs="*", help="run ids (default: every run in the workspace)")
+    fr.add_argument("--workspace", default="runs")
+
+    w = sub.add_parser(
+        "serve",
+        help="web UI: upload sources, generate, review questions and leave feedback",
+        description="Start the review web UI (needs: pip install 'trivium[web]'). Runs and "
+        "feedback are stored under --workspace; existing run folders there are listed too.",
+    )
+    w.add_argument("--workspace", default="runs", help="directory holding runs (default: runs)")
+    w.add_argument("--config", help="YAML config used for every run started from the UI")
+    w.add_argument("--provider", help="default LLM provider shown in the UI")
+    w.add_argument("--model", help="default model shown in the UI")
+    w.add_argument("--host", default="127.0.0.1")
+    w.add_argument(
+        "--port",
+        type=int,
+        help="default: the first free port from 8765 (fails if a given port is busy)",
+    )
+    w.add_argument("-v", "--verbose", action="store_true")
     return ap
 
 
@@ -115,6 +149,8 @@ def _overrides(args: argparse.Namespace) -> dict[str, Any]:
         gen["prefer_difficulty"] = args.prefer_difficulty
     if getattr(args, "require_document_dependence", False):
         gen["require_document_dependence"] = True
+    if getattr(args, "persona", None):
+        gen["personas"] = [p.strip() for p in args.persona if p.strip()]
     if getattr(args, "question_types", None):
         gen["question_types"] = [t.strip() for t in args.question_types.split(",") if t.strip()]
     models: dict[str, Any] = {"default": {}}
@@ -165,7 +201,19 @@ def cmd_generate(args: argparse.Namespace) -> int:
         raise SystemExit(
             "generate: provide --input/--topic or set inputs:/topic: in the config file"
         )
-    dataset, run = asyncio.run(generate_dataset(cfg))
+    from trivium.models.llm import ProviderAccessError
+
+    try:
+        dataset, run = asyncio.run(generate_dataset(cfg))
+    except ProviderAccessError as exc:
+        print(f"generate: stopped, the model provider refused service:\n{exc}", file=sys.stderr)
+        return 3
+    if run.stop_reason == "provider_refused":
+        print(
+            f"generate: stopped early, the model provider refused service:\n{run.error}\n"
+            f"wrote the {len(dataset.questions)} question(s) accepted before that",
+            file=sys.stderr,
+        )
     m = dataset.dataset_metrics
     print(
         json.dumps(
@@ -243,6 +291,62 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _port_free(host: str, port: int) -> bool:
+    import socket
+
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def pick_port(host: str, port: int | None, start: int = 8765, tries: int = 20) -> int:
+    """The requested port, or the first free one from ``start`` when none was requested."""
+    if port is not None:
+        if not _port_free(host, port):
+            raise SystemExit(f"serve: port {port} on {host} is already in use; pick another --port")
+        return port
+    for p in range(start, start + tries):
+        if _port_free(host, p):
+            return p
+    raise SystemExit(f"serve: no free port in {start}-{start + tries - 1}; pass --port")
+
+
+def cmd_feedback_report(args: argparse.Namespace) -> int:
+    from trivium.output.feedback import collect, report
+
+    rows = collect(args.workspace, args.runs or None)
+    print(json.dumps(report(rows), indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+
+        from trivium.web.app import create_app
+    except ImportError as exc:  # pragma: no cover
+        raise SystemExit(
+            f"serve: {exc}. Install the web extra: pip install 'trivium[web]'"
+        ) from None
+    args.port = pick_port(args.host, args.port)
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        logging.getLogger("trivium").warning(
+            "the review UI has no authentication; anyone who can reach %s:%d can upload files "
+            "and start LLM jobs",
+            args.host,
+            args.port,
+        )
+    defaults = {k: v for k, v in (("provider", args.provider), ("model", args.model)) if v}
+    app = create_app(args.workspace, base_config=args.config, defaults=defaults)
+    print(f"trivium review UI: http://{args.host}:{args.port}/  (workspace: {args.workspace})")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
@@ -250,9 +354,14 @@ def main(argv: list[str] | None = None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
-    return {"generate": cmd_generate, "extract": cmd_extract, "stats": cmd_stats}[args.command](
-        args
-    )
+    commands = {
+        "generate": cmd_generate,
+        "extract": cmd_extract,
+        "stats": cmd_stats,
+        "serve": cmd_serve,
+        "feedback-report": cmd_feedback_report,
+    }
+    return commands[args.command](args)
 
 
 if __name__ == "__main__":  # pragma: no cover
