@@ -182,6 +182,7 @@ def create_app(
             raise HTTPException(409, "this run was not created from the web UI")
         if job.get("status") in ("queued", "running"):
             raise HTTPException(409, "run is already queued or running")
+        ws.archive_feedback(d)  # regenerated questions reuse ids: old ratings must not carry over
         jobs.submit(run_id)
         return status(d)
 

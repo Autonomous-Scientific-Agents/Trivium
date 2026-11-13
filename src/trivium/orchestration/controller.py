@@ -19,7 +19,7 @@ from trivium.graph.builder import build_graph
 from trivium.ingestion.chunker import chunk_documents
 from trivium.ingestion.loader import load_inputs
 from trivium.ingestion.models import Chunk, Document
-from trivium.models.llm import LLMError
+from trivium.models.llm import LLMError, ProviderAccessError
 from trivium.models.registry import ModelRegistry
 from trivium.orchestration import coverage as cov
 from trivium.orchestration import selection
@@ -242,6 +242,11 @@ class Controller:
         except LLMError as exc:
             log.error("stopping after infrastructure error: %s", exc)
             self.run.stop_reason = "infrastructure_error"
+            self.run.error = str(exc)[:500]
+        except ProviderAccessError as exc:
+            # stop calling the provider, but keep (select, write) what was already accepted
+            log.error("stopping, the provider refused service: %s", exc)
+            self.run.stop_reason = "provider_refused"
             self.run.error = str(exc)[:500]
         await self._select_best()
         self.run.strategy_stats = self.selector.summary()

@@ -105,8 +105,8 @@ _PRONOUNS = re.compile(
 # Comparing or doing arithmetic on them ("NRANKS_PER_NODE divided by NTHREADS") makes filler.
 _SETTING_SUBJECT = re.compile(r"^\$?\{?[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\}?$|^--?[A-Za-z]")
 _SETTING_PREDICATE = re.compile(
-    r"^(?:is_)?(?:set|sets|set_to|set_as|defaults?|defaults?_to|default_value|value|has_value|"
-    r"equals?|assigned(?:_to)?|configured(?:_as|_to)?|exported(?:_as|_to)?)(?:_to)?$"
+    r"^(?:is_)?(?:set|sets|set_to|set_as|defaults?_to|default_value|has_default(?:_value)?|"
+    r"assigned_to|configured(?:_as|_to)?|exported(?:_as|_to)?)$"
 )
 
 

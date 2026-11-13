@@ -209,3 +209,16 @@ def test_pick_port_skips_busy_ports():
         assert pick_port("127.0.0.1", None, start=taken) != taken
         with pytest.raises(SystemExit, match="already in use"):
             pick_port("127.0.0.1", taken)
+
+
+def test_archive_feedback_moves_ratings_aside(tmp_path):
+    from trivium.web.store import Workspace
+
+    ws = Workspace(tmp_path)
+    d = tmp_path / "run1"
+    d.mkdir()
+    ws.set_feedback(d, "q_0001", rating="down", comment="bad")
+    assert ws.feedback(d)
+    dst = ws.archive_feedback(d)
+    assert dst is not None and dst.exists() and dst.name.startswith("feedback.")
+    assert ws.feedback(d) == {} and ws.archive_feedback(d) is None

@@ -345,8 +345,8 @@ class Config(BaseModel):
             with open(path, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh) or {}
         # precedence: explicit overrides (CLI) > environment > YAML file > defaults
-        data = _deep_update(data, _env_overrides())
-        data = _deep_update(data, overrides)
+        for upd in (_env_overrides(), overrides):
+            data = _deep_update(_switch_default_provider(data, upd), upd)
         return cls.model_validate(data)
 
     def public_dump(self) -> dict[str, Any]:
@@ -400,6 +400,19 @@ def _env_overrides() -> dict[str, Any]:
         if os.environ.get(env):
             default[field] = os.environ[env]
     return {"models": {"default": default}} if default else {}
+
+
+def _switch_default_provider(data: dict[str, Any], upd: dict[str, Any]) -> dict[str, Any]:
+    """If ``upd`` changes ``models.default.provider``, drop the old provider's endpoint, key and
+    client options from ``data`` (unless ``upd`` sets them too)."""
+    new = ((upd.get("models") or {}).get("default") or {}) if isinstance(upd, dict) else {}
+    old = (data.get("models") or {}).get("default") or {}
+    if not new.get("provider") or not old:
+        return data
+    if str(new["provider"]).lower() == str(old.get("provider", "openai")).lower():
+        return data
+    kept = {k: v for k, v in old.items() if k not in ("base_url", "api_key_env", "options")}
+    return {**data, "models": {**data["models"], "default": kept}}
 
 
 def _deep_update(base: dict[str, Any], upd: dict[str, Any]) -> dict[str, Any]:

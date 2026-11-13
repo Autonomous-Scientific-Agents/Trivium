@@ -17,16 +17,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from pydantic import BaseModel, Field
 
 from trivium.config import TriviaConfig
-from trivium.evaluation.form import source_reference
 from trivium.facts.models import Fact
 from trivium.facts.store import FactStore
 from trivium.ingestion.models import Chunk
 from trivium.models.llm import LLM, LLMError
 from trivium.prompts import build_messages
+
+# subjects that name the document itself ("Aurora container guide", "Podman documentation")
+_DOC_SUBJECT = re.compile(
+    r"(?:^|\s)(?:user )?(?:guide|guides|documentation|docs|manual|tutorial|web ?page|page)$", re.I
+)
 
 log = logging.getLogger(__name__)
 
@@ -136,7 +141,7 @@ async def _score_batch(
         f = by_id.get(s.fact_id)
         if f is not None:
             f.trivia_score = max(0.0, min(1.0, s.trivia_score))
-            if source_reference(f"the {f.subject}"):  # "Aurora container guide | details …"
+            if _DOC_SUBJECT.search(f.subject.strip()):  # "Aurora container guide | details …"
                 f.trivia_score = min(f.trivia_score, 0.05)
 
 

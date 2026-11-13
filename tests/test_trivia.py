@@ -406,3 +406,12 @@ async def test_end_to_end_trivia_mode_best(tmp_path):
         assert not local_label(q.question) and not source_reference(q.question)
         if q.type == "short_answer":
             assert len(q.answer.split()) <= 4
+
+
+def test_document_subjects_are_capped_but_content_subjects_are_not():
+    from trivium.facts.trivia import _DOC_SUBJECT
+
+    for subj in ("Aurora container guide", "Podman documentation", "This page", "user guide"):
+        assert _DOC_SUBJECT.search(subj), subj
+    for subj in ("Source code of LAMMPS", "Evidence lower bound", "Text encoding", "Article 5"):
+        assert not _DOC_SUBJECT.search(subj), subj

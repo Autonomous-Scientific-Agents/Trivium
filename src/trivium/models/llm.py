@@ -97,9 +97,15 @@ _ACCESS_DENIED = re.compile(
 )
 
 
-def access_denied(text: str) -> str | None:
-    """The provider's refusal notice, if ``text`` is one."""
-    if _ACCESS_DENIED.search(text or ""):
+# A *successful* response is only treated as a refusal when it carries the gateway's own banner
+# (case-sensitive): a real answer may well say "quota exceeded" or "revoked or expired".
+_NOTICE_BANNER = re.compile(r"ACCESS REVOKED|IMPORTANT USAGE NOTICE")
+
+
+def access_denied(text: str, *, response: bool = False) -> str | None:
+    """The provider's refusal notice, if ``text`` (an error message, or with ``response=True`` a
+    model response) is one."""
+    if (_NOTICE_BANNER if response else _ACCESS_DENIED).search(text or ""):
         return re.sub(r"[*⚠️🚫]+", "", text).strip()[:500]
     return None
 
@@ -244,7 +250,7 @@ class LLM:
                     ) from exc
                 await asyncio.sleep(min(2**attempt, 8))
                 continue
-            notice = access_denied(text)
+            notice = access_denied(text, response=True)
             if notice:
                 raise ProviderAccessError(f"{self.provider}:{self.model} refused service: {notice}")
             try:

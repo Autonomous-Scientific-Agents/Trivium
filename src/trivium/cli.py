@@ -208,6 +208,12 @@ def cmd_generate(args: argparse.Namespace) -> int:
     except ProviderAccessError as exc:
         print(f"generate: stopped, the model provider refused service:\n{exc}", file=sys.stderr)
         return 3
+    if run.stop_reason == "provider_refused":
+        print(
+            f"generate: stopped early, the model provider refused service:\n{run.error}\n"
+            f"wrote the {len(dataset.questions)} question(s) accepted before that",
+            file=sys.stderr,
+        )
     m = dataset.dataset_metrics
     print(
         json.dumps(

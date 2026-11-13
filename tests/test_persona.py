@@ -43,6 +43,8 @@ def test_settings_are_detected():
     assert is_setting(_fact(3, "--ppn", "takes", "12", 12))
     assert not is_setting(_fact(4, "Aurora compute node", "gpus_per_node", "6", 6))
     assert not is_setting(_fact(5, "MACE", "has_error", "0.23 eV", 0.23))
+    assert not is_setting(_fact(6, "Boltzmann constant", "value", "1.38e-23 J/K", 1.38e-23))
+    assert not is_setting(_fact(7, "MACE MAE", "has_value", "0.12 eV", 0.12))
 
 
 def test_settings_are_not_compared():

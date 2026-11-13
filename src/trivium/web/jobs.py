@@ -213,6 +213,7 @@ class JobQueue:
         self.current = run_id
         handler = _ThreadLogHandler(run_dir / "generate.log", threading.get_ident())
         logger = logging.getLogger("trivium")
+        level = logger.level
         logger.addHandler(handler)
         try:
             cfg = build_config(
@@ -234,5 +235,6 @@ class JobQueue:
             )
         finally:
             logger.removeHandler(handler)
+            logger.setLevel(level)
             handler.close()
             self.current = None

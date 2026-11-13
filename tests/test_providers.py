@@ -260,3 +260,48 @@ def test_mixed_example_config(alcf_env, sage_env, tmp_path):
     assert str(reg["judge"]._client.base_url).rstrip("/") == ASKSAGE_BASE_URL
     assert reg["open_book"].cluster == "minerva"
     assert reg.embedder.name == "alcf"
+
+
+# ------------------------------------------------------------- review regressions
+async def test_answers_about_quotas_are_not_refusals():
+    from trivium.models.llm import MockLLM
+
+    class Says(MockLLM):
+        async def _complete(self, messages, **kw):
+            return '{"answer": "quota exceeded; tokens that are revoked or expired"}'
+
+    llm = Says()
+    resp = await llm.generate([{"role": "user", "content": "x"}])
+    assert "quota exceeded" in resp.text
+
+
+def test_cli_provider_switch_drops_the_config_files_endpoint(alcf_env):
+    cfg = Config.load("examples/config.argo-proxy.yaml", models={"default": {"provider": "alcf"}})
+    d = cfg.models.default
+    assert d.provider == "alcf" and d.base_url is None and d.options == {}
+    assert d.api_key_env == "OPENAI_API_KEY" and d.max_tokens == 2048  # neutral settings kept
+    same = Config.load("examples/config.argo-proxy.yaml", models={"default": {"model": "x"}})
+    assert same.models.default.base_url == "http://127.0.0.1:44497/v1"
+
+
+def test_alcf_embedder_with_base_url_and_cluster(alcf_env):
+    emb = build_embedder("alcf", base_url="https://example/v1", cluster="metis")
+    assert str(emb._client.base_url).rstrip("/") == "https://example/v1"
+
+
+async def test_provider_refusal_mid_run_keeps_accepted_questions(tmp_path, monkeypatch):
+    from conftest import mock_config
+
+    import trivium.orchestration.controller as ctl
+
+    real_loop = ctl.Controller._loop
+
+    async def loop_then_refuse(self):
+        await real_loop(self)  # accepts questions normally, then the quota runs out
+        raise ProviderAccessError("asksage:x refused service: Token quota exceeded")
+
+    monkeypatch.setattr(ctl.Controller, "_loop", loop_then_refuse)
+    cfg = mock_config(output=str(tmp_path / "q.json"), generation={"num_questions": 4, "seed": 3})
+    ds, run = await ctl.generate_dataset(cfg, write=True)
+    assert run.stop_reason == "provider_refused" and "quota" in run.error
+    assert ds.questions and (tmp_path / "q.json").exists()

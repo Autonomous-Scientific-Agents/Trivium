@@ -305,18 +305,26 @@ class MultipleChoiceConverter:
             return None
         letters = "ABCDEFGH"
         orders = [list(options), list(reversed(options))]
-        hits = 0
-        for trial, order in enumerate(orders):
-            payload = {"options": [f"{letters[i]}) {o}" for i, o in enumerate(order)]}
-            try:
-                resp = await self.probe.generate(
-                    build_messages(OPTIONS_ONLY_SYSTEM, OPTIONS_ONLY_INSTRUCTIONS, payload),
-                    OptionsOnlyPick,
-                    task="options_only",
-                    trial=trial,
+        try:
+            resps = await asyncio.gather(
+                *(
+                    self.probe.generate(
+                        build_messages(
+                            OPTIONS_ONLY_SYSTEM,
+                            OPTIONS_ONLY_INSTRUCTIONS,
+                            {"options": [f"{letters[i]}) {o}" for i, o in enumerate(order)]},
+                        ),
+                        OptionsOnlyPick,
+                        task="options_only",
+                        trial=trial,
+                    )
+                    for trial, order in enumerate(orders)
                 )
-            except LLMError:
-                return None
+            )
+        except LLMError:
+            return None
+        hits = 0
+        for order, resp in zip(orders, resps, strict=True):
             pick = resp.parsed.answer.strip()[:1].upper()  # type: ignore[union-attr]
             if pick in letters[: len(order)] and order[letters.index(pick)] == correct:
                 hits += 1

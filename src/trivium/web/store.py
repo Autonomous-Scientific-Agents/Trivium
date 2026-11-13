@@ -165,6 +165,18 @@ class Workspace:
         data = read_json(run_dir / _FEEDBACK)
         return data.get("items", {}) if isinstance(data, dict) else {}
 
+    def archive_feedback(self, run_dir: Path) -> Path | None:
+        """Move ``feedback.json`` aside (``feedback.<timestamp>.json``; entries keep their question
+        snapshots) before a run's questions are regenerated."""
+        src = run_dir / _FEEDBACK
+        if not src.exists():
+            return None
+        stamp = now().replace(":", "").replace("-", "").split(".")[0]
+        dst = run_dir / f"feedback.{stamp}.json"
+        with self._lock:
+            src.replace(dst)
+        return dst
+
     def set_feedback(
         self,
         run_dir: Path,

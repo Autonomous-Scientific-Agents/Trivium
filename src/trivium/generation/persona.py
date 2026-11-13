@@ -123,6 +123,7 @@ class PersonaGenerator(Generator):
         self._asked: list[str] = []
         self._style_i = 0
         self._vecs: np.ndarray | None = None
+        self._vecs_lock = asyncio.Lock()  # propose() grounds ideas concurrently
         self._ids: list[str] = []
         self.gaps: list[dict[str, Any]] = []  # partial / unanswerable questions
         self._n_quotes = 0
@@ -171,12 +172,13 @@ class PersonaGenerator(Generator):
 
     # -------------------------------------------------------------- retrieval
     async def _passages(self, question: str, k: int = 4) -> list[dict[str, str]]:
-        chunks = list(self.ctx.chunks.values())
-        if self._vecs is None:
-            self._ids = [c.id for c in chunks]
-            self._vecs = await self.ctx.embedder.embed(
-                [f"{c.section_title}\n{c.text}" for c in chunks]
-            )
+        async with self._vecs_lock:
+            if self._vecs is None:
+                chunks = list(self.ctx.chunks.values())
+                self._ids = [c.id for c in chunks]
+                self._vecs = await self.ctx.embedder.embed(
+                    [f"{c.section_title}\n{c.text}" for c in chunks]
+                )
         q = (await self.ctx.embedder.embed([question]))[0]
         order = np.argsort(-(self._vecs @ q))[:k]
         out = []
